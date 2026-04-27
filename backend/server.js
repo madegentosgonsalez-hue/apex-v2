@@ -40,6 +40,9 @@ const learning   = new LearningEngine({ db });
 // Active pairs list (can be toggled from settings)
 let activePairs = ['EURUSD', 'XAUUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD'];
 
+// Current scan state — read by /api/status
+let scanState = { scanning: false, brain: null, currentPair: null, lastScanAt: null };
+
 // Runtime settings
 let settings = {
   autoExecute:        process.env.AUTO_EXECUTE === 'true',
@@ -78,7 +81,9 @@ async function startup() {
 
 // Every 15 min: scan all pairs
 cron.schedule('*/15 * * * *', async () => {
+  scanState = { scanning: true, brain: 'Brain1', currentPair: null, lastScanAt: new Date().toISOString() };
   for (const pair of activePairs) {
+    scanState.currentPair = pair;
     try {
       const signal = await brain1.scan(pair);
       if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
@@ -89,13 +94,16 @@ cron.schedule('*/15 * * * *', async () => {
       sysLog('error', `Brain1 scan error on ${pair}: ${err.message}`, pair);
     }
   }
+  scanState.scanning = false; scanState.brain = null; scanState.currentPair = null;
 });
 
 // Every 5 min: monitor open positions
 cron.schedule('*/5 * * * *', async () => {
+  if (!scanState.scanning) scanState.brain = 'Brain2';
   try { await brain2.monitorAll(); } catch (err) {
     sysLog('error', `Brain2 monitor error: ${err.message}`);
   }
+  if (scanState.brain === 'Brain2') scanState.brain = null;
 });
 
 // Every minute: check TP1/TP2/SL exits
@@ -217,6 +225,11 @@ app.get('/api/status', async (req, res) => {
       manualReview:      settings.manualReview,
       timezone:          'Australia/Sydney',
       sydneyTime:        new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney' }),
+      activePairs:       activePairs,
+      scanning:          scanState.scanning,
+      activeBrain:       scanState.brain,
+      currentPair:       scanState.currentPair,
+      lastScanAt:        scanState.lastScanAt,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -250,8 +263,10 @@ app.get('/api/trades/open', async (req, res) => {
 
 // POST /api/scan/manual
 app.post('/api/scan/manual', async (req, res) => {
+  scanState = { scanning: true, brain: 'Brain1 (manual)', currentPair: null, lastScanAt: new Date().toISOString() };
   const results = [];
   for (const pair of activePairs) {
+    scanState.currentPair = pair;
     try {
       const signal = await brain1.scan(pair);
       results.push({ pair, signal: signal?.confidence_tier || 'NONE' });
@@ -263,7 +278,20 @@ app.post('/api/scan/manual', async (req, res) => {
       results.push({ pair, error: err.message });
     }
   }
+  scanState.scanning = false; scanState.brain = null; scanState.currentPair = null;
   res.json({ scanned: activePairs, signals: results.filter(r => r.signal && r.signal !== 'NONE').length, results });
+});
+
+// GET /api/signals/active
+app.get('/api/signals/active', async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT * FROM signals WHERE status = 'ACTIVE' ORDER BY created_at DESC LIMIT 20`
+    );
+    res.json(r.rows || []);
+  } catch {
+    res.json([]);
+  }
 });
 
 // GET /api/analyzer

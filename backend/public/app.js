@@ -1,41 +1,42 @@
 'use strict';
-// APEX V2 — Frontend App (~500 lines)
+// APEX V2 — Frontend App
 // Polls backend API, renders all tabs, handles user actions
 
-const API = '';  // Same-origin — backend serves this file
+const API = '';  // same-origin — backend serves this file
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
 let state = {
-  settings:     {},
-  activePairs:  ['EURUSD','XAUUSD','GBPUSD','USDJPY','AUDUSD','USDCAD'],
-  allPairs:     ['EURUSD','XAUUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','NZDUSD','USDCHF','EURJPY','GBPJPY'],
-  logFilter:    'all',
+  settings:    {},
+  activePairs: ['EURUSD','XAUUSD','GBPUSD','USDJPY','AUDUSD','USDCAD'],
+  allPairs:    ['EURUSD','XAUUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','NZDUSD','USDCHF','EURJPY','GBPJPY'],
+  logFilter:   'all',
+  tvWidgets:   {},   // container id → widget instance placeholder
 };
 
-// ── TABS ─────────────────────────────────────────────────────────────────────
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
-    if (btn.dataset.tab === 'learning')     loadLearning();
-    if (btn.dataset.tab === 'subscribers')  loadSubscribers();
-    if (btn.dataset.tab === 'logs')         loadLogs();
-    if (btn.dataset.tab === 'analyzer')     loadAnalyzer();
-    if (btn.dataset.tab === 'broker')       loadBroker();
-  });
-});
-
 // ── HELPERS ───────────────────────────────────────────────────────────────────
-async function api(path, options = {}) {
-  const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...options });
-  return r.json();
-}
 const $ = id => document.getElementById(id);
-const fmt = (n, decimals = 2) => n == null ? '—' : parseFloat(n).toFixed(decimals);
+const fmt = (n, d = 2) => n == null ? '—' : parseFloat(n).toFixed(d);
 const fmtMoney = n => n == null ? '—' : `$${parseFloat(n).toFixed(2)}`;
-const sydneyTime = () => new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney', hour12: false });
+const sydneyNow = () => new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney', hour12: false });
+
+async function apiFetch(path, options = {}) {
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 35000);
+  try {
+    const r    = await fetch(API + path, {
+      headers: { 'Content-Type': 'application/json' },
+      signal:  ctrl.signal,
+      ...options,
+    });
+    clearTimeout(timer);
+    const text = await r.text();
+    try { return JSON.parse(text); }
+    catch { return { _error: true, _status: r.status, _raw: text.slice(0, 200) }; }
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
+  }
+}
 
 function setDot(id, connected) {
   const el = $(id);
@@ -47,64 +48,255 @@ function toggleBtn(id, isOn) {
   const el = $(id);
   if (!el) return;
   el.textContent = isOn ? 'ON' : 'OFF';
-  el.className = 'toggle-btn ' + (isOn ? 'on' : 'off');
+  el.className   = 'toggle-btn ' + (isOn ? 'on' : 'off');
 }
+
+function showMsg(id, text, isErr = false) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className   = 'msg' + (isErr ? ' err' : '');
+  setTimeout(() => { el.textContent = ''; }, 4000);
+}
+
+function flash(id) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 600);
+}
+
+// ── COUNTDOWN TIMER ───────────────────────────────────────────────────────────
+function getSecondsToNextScan() {
+  const now  = new Date();
+  const mins = now.getMinutes();
+  const secs = now.getSeconds();
+  // cron fires at :00, :15, :30, :45
+  const minsIntoInterval = mins % 15;
+  return (15 - minsIntoInterval) * 60 - secs;
+}
+
+function updateCountdown() {
+  const secs  = getSecondsToNextScan();
+  const m     = String(Math.floor(secs / 60)).padStart(2, '0');
+  const s     = String(secs % 60).padStart(2, '0');
+  const el    = $('countdown');
+  if (!el) return;
+  el.textContent = `${m}:${s}`;
+  el.className   = 'countdown' + (secs < 60 ? ' urgent' : '');
+}
+
+// ── TABS ─────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+    const tab = btn.dataset.tab;
+    if (tab === 'charts')      initChartTab();
+    if (tab === 'signals')     loadSignals();
+    if (tab === 'learning')    loadLearning();
+    if (tab === 'subscribers') loadSubscribers();
+    if (tab === 'logs')        loadLogs();
+    if (tab === 'analyzer')    loadAnalyzer();
+    if (tab === 'broker')      loadBroker();
+  });
+});
+
+// ── TRADINGVIEW WIDGET ────────────────────────────────────────────────────────
+const tvSymbol = {
+  EURUSD: 'FX:EURUSD',
+  XAUUSD: 'TVC:GOLD',
+  GBPUSD: 'FX:GBPUSD',
+  USDJPY: 'FX:USDJPY',
+  AUDUSD: 'FX:AUDUSD',
+  USDCAD: 'FX:USDCAD',
+  NZDUSD: 'FX:NZDUSD',
+  USDCHF: 'FX:USDCHF',
+  EURJPY: 'FX:EURJPY',
+  GBPJPY: 'FX:GBPJPY',
+};
+
+let tvWidgetIdx = 0;
+
+function initTVWidget(containerId, symbol, interval) {
+  const container = $(containerId);
+  if (!container) return;
+  container.innerHTML = '';
+
+  // TradingView requires a unique inner div ID each time
+  const innerId = `tv_inner_${++tvWidgetIdx}`;
+  const inner   = document.createElement('div');
+  inner.id      = innerId;
+  inner.style.cssText = 'width:100%;height:100%';
+  container.appendChild(inner);
+
+  if (typeof TradingView === 'undefined') {
+    inner.innerHTML = '<p class="empty" style="padding-top:5rem">TradingView script loading — try again in a moment</p>';
+    return;
+  }
+
+  try {
+    new TradingView.widget({
+      autosize:          true,
+      symbol:            symbol,
+      interval:          interval || '60',
+      timezone:          'Australia/Sydney',
+      theme:             'dark',
+      style:             '1',
+      locale:            'en',
+      toolbar_bg:        '#0e0e0e',
+      enable_publishing: false,
+      save_image:        false,
+      hide_top_toolbar:  false,
+      container_id:      innerId,
+    });
+  } catch (e) {
+    inner.innerHTML = `<p class="empty" style="padding-top:5rem">Chart error: ${e.message}</p>`;
+  }
+}
+
+// Dashboard mini chart
+function initDashChart() {
+  const sym = $('dash-chart-pair')?.value || 'FX:EURUSD';
+  initTVWidget('dash-tv-container', sym, '60');
+}
+
+// Charts tab
+function initChartTab() {
+  const sym = $('chart-pair')?.value || 'FX:EURUSD';
+  const tf  = $('chart-tf')?.value || '60';
+  initTVWidget('main-tv-container', sym, tf);
+}
+
+$('dash-chart-pair')?.addEventListener('change', initDashChart);
+$('btn-load-chart')?.addEventListener('click', initChartTab);
 
 // ── STATUS POLL ───────────────────────────────────────────────────────────────
 async function pollStatus() {
   try {
-    const s = await api('/api/status');
-    // Header dots
-    setDot('hdr-ctrader',  s.brokerConnected);
-    setDot('hdr-telegram', s.telegramConnected);
-    $('hdr-time').textContent = s.sydneyTime || sydneyTime();
+    const s = await apiFetch('/api/status');
 
-    // Dashboard
+    // Header dots
+    setDot('hdr-broker',   s.brokerConnected);
+    setDot('hdr-telegram', s.telegramConnected);
+    $('hdr-time').textContent = s.sydneyTime || sydneyNow();
+
+    // Brain / scan indicator
+    const brainEl = $('brain-label');
+    const pulseEl = $('pulse-dot');
+    if (brainEl) {
+      if (s.scanning && s.activeBrain) {
+        brainEl.textContent = s.activeBrain + (s.currentPair ? ` → ${s.currentPair}` : '');
+        brainEl.className   = 'brain-label';
+        if (pulseEl) pulseEl.className = 'pulse-dot';
+      } else {
+        brainEl.textContent = 'ONLINE';
+        brainEl.className   = 'brain-label';
+        if (pulseEl) pulseEl.className = 'pulse-dot';
+      }
+    }
+
+    // Status bar — active pairs
+    const pairsBarEl = $('active-pairs-bar');
+    if (pairsBarEl && s.activePairs) {
+      pairsBarEl.textContent = s.activePairs.join(' · ');
+      state.activePairs = s.activePairs;
+    }
+    const lastScanEl = $('last-scan-bar');
+    if (lastScanEl && s.lastScanAt) {
+      const d = new Date(s.lastScanAt);
+      lastScanEl.textContent = `Last scan: ${d.toLocaleTimeString('en-AU', { timeZone: 'Australia/Sydney', hour12: false })}`;
+    }
+
+    // Dashboard stats
+    const prevBal = $('s-balance')?.textContent;
+    const newBal  = fmtMoney(s.balance);
+    if (prevBal !== newBal) { $('s-balance').textContent = newBal; flash('s-balance'); }
+
     const pnlEl = $('s-pnl');
-    $('s-balance').textContent = fmtMoney(s.balance);
     if (pnlEl) {
       pnlEl.textContent = s.todayPnL != null ? (s.todayPnL >= 0 ? '+' : '') + fmtMoney(s.todayPnL) : '—';
-      pnlEl.className = 'stat-value ' + (s.todayPnL > 0 ? 'pos' : s.todayPnL < 0 ? 'neg' : '');
+      pnlEl.className   = 'stat-value ' + (s.todayPnL > 0 ? 'pos' : s.todayPnL < 0 ? 'neg' : '');
     }
-    $('s-wr').textContent     = s.winRate7d != null ? s.winRate7d + '%' : '—';
-    $('s-losses').textContent = s.dailyLosses != null ? `${s.dailyLosses}/${s.dailyLossLimit}` : '—';
-    $('s-open').textContent   = s.openPositions ?? '—';
-
-    if (s.lastSignal) {
+    if ($('s-wr'))     $('s-wr').textContent     = s.winRate7d != null ? s.winRate7d + '%' : '—';
+    if ($('s-losses')) $('s-losses').textContent = s.dailyLosses != null ? `${s.dailyLosses}/${s.dailyLossLimit}` : '—';
+    if ($('s-open'))   $('s-open').textContent   = s.openPositions ?? '—';
+    if (s.lastSignal && $('s-last-signal')) {
       $('s-last-signal').textContent = `${s.lastSignal.pair} ${s.lastSignal.direction} (${s.lastSignal.tier})`;
     }
 
-    setDot('d-ctrader-dot',  s.brokerConnected);
+    // Connection row
+    setDot('d-broker-dot',   s.brokerConnected);
     setDot('d-telegram-dot', s.telegramConnected);
     const autoEl = $('d-auto-exec');
-    if (autoEl) {
-      autoEl.textContent = s.autoExecute ? 'ON' : 'OFF';
-      autoEl.className = 'badge ' + (s.autoExecute ? 'on' : 'off');
-    }
+    if (autoEl) { autoEl.textContent = s.autoExecute ? 'ON' : 'OFF'; autoEl.className = 'badge ' + (s.autoExecute ? 'on' : 'off'); }
+    const modeEl = $('d-mode');
+    if (modeEl) { modeEl.textContent = s.liveMode ? 'LIVE' : 'PAPER'; modeEl.className = 'badge ' + (s.liveMode ? 'on' : 'off'); }
 
-    // Sync settings state
+    // Sync toggle state
     state.settings = { ...state.settings, autoExecute: s.autoExecute, manualReview: s.manualReview };
-    toggleBtn('toggle-auto',   s.autoExecute);
-    toggleBtn('toggle-manual', s.manualReview);
-    toggleBtn('set-auto-exec',   s.autoExecute);
+    toggleBtn('toggle-auto',       s.autoExecute);
+    toggleBtn('toggle-manual',     s.manualReview);
+    toggleBtn('set-auto-exec',     s.autoExecute);
     toggleBtn('set-manual-review', s.manualReview);
 
-    // Telegram tab status
+    // Telegram tab
     setDot('tg-status-dot', s.telegramConnected);
-    $('tg-status-text') && ($('tg-status-text').textContent = s.telegramConnected ? 'Connected' : 'Disconnected');
-  } catch {}
+    if ($('tg-status-text')) $('tg-status-text').textContent = s.telegramConnected ? 'Connected' : 'Disconnected';
+  } catch (err) {
+    // System offline — dim pulse
+    const pulseEl = $('pulse-dot');
+    if (pulseEl) pulseEl.className = 'pulse-dot offline';
+    const brainEl = $('brain-label');
+    if (brainEl) { brainEl.textContent = 'OFFLINE'; brainEl.className = 'brain-label idle'; }
+  }
 }
+
+// ── SIGNALS ───────────────────────────────────────────────────────────────────
+async function loadSignals() {
+  try {
+    const signals = await apiFetch('/api/signals/active');
+    const list    = $('signals-list');
+    if (!signals.length) {
+      list.innerHTML = '<p class="empty">No active signals at the moment</p>';
+      return;
+    }
+    list.innerHTML = signals.map(sig => {
+      const dir    = sig.direction || '—';
+      const tier   = sig.confidence_tier || sig.tier || '—';
+      const cls    = dir === 'LONG' ? 'bull' : dir === 'SHORT' ? 'bear' : '';
+      const tierCls = tier === 'DIAMOND' ? 'badge-diamond' : tier === 'GOLD' ? 'badge-gold' : 'badge-silver';
+      return `
+        <div class="signal-card ${cls}">
+          <div class="sig-pair">${sig.symbol || '—'}</div>
+          <div class="sig-tier ${tierCls}">${tier}</div>
+          <div class="sig-dir ${dir}">${dir}</div>
+          <div style="font-size:.65rem;color:var(--muted)">${sig.created_at ? new Date(sig.created_at).toLocaleTimeString('en-AU',{timeZone:'Australia/Sydney',hour12:false}) : '—'}</div>
+          <div><span class="sig-label">Entry</span><br><span class="sig-val">${fmt(sig.entry_price,5)}</span></div>
+          <div><span class="sig-label">Stop Loss</span><br><span class="sig-val">${fmt(sig.stop_loss,5)}</span></div>
+          <div><span class="sig-label">TP1</span><br><span class="sig-val">${fmt(sig.tp1,5)}</span></div>
+          <div><span class="sig-label">TP2</span><br><span class="sig-val">${fmt(sig.tp2,5)}</span></div>
+        </div>`;
+    }).join('');
+  } catch {
+    $('signals-list').innerHTML = '<p class="empty">Could not load signals</p>';
+  }
+}
+
+$('btn-refresh-signals')?.addEventListener('click', loadSignals);
 
 // ── RECENT TRADES ─────────────────────────────────────────────────────────────
 async function loadRecentTrades() {
   try {
-    const trades = await api('/api/trades/recent');
-    const tbody = $('recent-trades-body');
+    const trades = await apiFetch('/api/trades/recent');
+    const tbody  = $('recent-trades-body');
     if (!trades.length) {
       tbody.innerHTML = '<tr><td colspan="7" class="empty">No trades yet</td></tr>';
       return;
     }
-    tbody.innerHTML = trades.slice(0,10).map(t => `
+    tbody.innerHTML = trades.slice(0, 10).map(t => `
       <tr>
         <td>${t.symbol || '—'}</td>
         <td>${t.direction || '—'}</td>
@@ -115,10 +307,9 @@ async function loadRecentTrades() {
         <td>${t.closed_at ? new Date(t.closed_at).toLocaleString('en-AU',{timeZone:'Australia/Sydney',hour12:false}) : '—'}</td>
       </tr>`).join('');
 
-    // Also fill last-10 in Trading tab
     const l10 = $('last10-body');
     if (l10) {
-      l10.innerHTML = trades.slice(0,10).map(t => `
+      l10.innerHTML = trades.slice(0, 10).map(t => `
         <tr>
           <td>${t.symbol || '—'}</td>
           <td>${t.direction || '—'}</td>
@@ -133,7 +324,7 @@ async function loadRecentTrades() {
 // ── OPEN POSITIONS ────────────────────────────────────────────────────────────
 async function loadOpenPositions() {
   try {
-    const pos = await api('/api/trades/open');
+    const pos   = await apiFetch('/api/trades/open');
     const tbody = $('open-positions-body');
     if (!pos.length) {
       tbody.innerHTML = '<tr><td colspan="7" class="empty">No open positions</td></tr>';
@@ -144,9 +335,9 @@ async function loadOpenPositions() {
         <td>${p.symbol || '—'}</td>
         <td>${p.tradeSide || p.direction || '—'}</td>
         <td>${fmt(p.entryPrice || p.entry_price, 5)}</td>
-        <td>${fmt(p.stopLoss || p.stop_loss, 5)}</td>
+        <td>${fmt(p.stopLoss   || p.stop_loss, 5)}</td>
         <td>${fmt(p.takeProfit || p.tp1, 5)}</td>
-        <td>${fmt(p.volume || p.size, 2)}</td>
+        <td>${fmt(p.volume     || p.size, 2)}</td>
         <td>${fmtMoney(p.pnl)}</td>
       </tr>`).join('');
   } catch {}
@@ -154,23 +345,51 @@ async function loadOpenPositions() {
 
 // ── ANALYZER ─────────────────────────────────────────────────────────────────
 async function loadAnalyzer() {
+  const grid = $('analyzer-grid');
+  grid.innerHTML = state.activePairs.map(p => `
+    <div class="analyzer-card" id="ac-${p}">
+      <div class="pair-name">${p}</div>
+      <div class="pair-stat"><span class="label">Status</span><span>Loading…</span></div>
+    </div>`).join('');
+
   try {
-    const data = await api('/api/analyzer');
-    const grid = $('analyzer-grid');
+    const data = await apiFetch('/api/analyzer');
     grid.innerHTML = data.map(d => `
-      <div class="analyzer-card">
+      <div class="analyzer-card${d.status !== 'OK' ? ' scan-error' : ''}">
         <div class="pair-name">${d.pair}</div>
         <div class="pair-stat"><span class="label">Status</span><span>${d.status}</span></div>
         ${d.data ? `
         <div class="pair-stat"><span class="label">Regime</span><span>${d.data.regime || '—'}</span></div>
         <div class="pair-stat"><span class="label">Session</span><span>${d.data.session || '—'}</span></div>
-        <div class="pair-stat"><span class="label">News Block</span><span>${d.data.newsBlackout ? 'YES' : 'NO'}</span></div>
-        ` : ''}
+        <div class="pair-stat"><span class="label">News block</span><span>${d.data.newsBlackout ? 'YES' : 'NO'}</span></div>
+        ` : '<div class="pair-stat"><span class="label">Detail</span><span style="color:var(--red)">No data</span></div>'}
       </div>`).join('');
   } catch {
-    $('analyzer-grid').innerHTML = '<p class="empty">Analyzer unavailable</p>';
+    grid.innerHTML = '<p class="empty">Analyzer unavailable</p>';
   }
 }
+
+// ── SCAN NOW ──────────────────────────────────────────────────────────────────
+$('btn-scan-now')?.addEventListener('click', async () => {
+  const btn = $('btn-scan-now');
+  btn.textContent = 'Scanning…';
+  btn.disabled    = true;
+  showMsg('scan-msg', '');
+  try {
+    const r = await apiFetch('/api/scan/manual', { method: 'POST' });
+    if (r._error) {
+      showMsg('scan-msg', `Server error (${r._status}) — check logs`, true);
+    } else {
+      const count = r.signals ?? 0;
+      showMsg('scan-msg', `Scan complete — ${count} signal(s) found across ${(r.scanned || []).length} pairs`);
+      if (count > 0) loadSignals();
+    }
+  } catch (err) {
+    showMsg('scan-msg', err.name === 'AbortError' ? 'Scan timed out — still running in background' : 'Network error', true);
+  }
+  btn.textContent = 'Manual Scan Now';
+  btn.disabled    = false;
+});
 
 // ── PAIRS ─────────────────────────────────────────────────────────────────────
 function renderPairs() {
@@ -183,24 +402,23 @@ function renderPairs() {
 }
 
 $('btn-save-pairs')?.addEventListener('click', async () => {
-  const checked = [...document.querySelectorAll('#pairs-grid input:checked')].map(i => i.value);
+  const checked    = [...document.querySelectorAll('#pairs-grid input:checked')].map(i => i.value);
   state.activePairs = checked;
-  await api('/api/pairs/update', { method: 'POST', body: JSON.stringify({ pairs: checked }) });
-  showMsg('settings-msg', 'Pairs saved');
+  await apiFetch('/api/pairs/update', { method: 'POST', body: JSON.stringify({ pairs: checked }) });
+  showMsg('pairs-msg', 'Pairs saved');
 });
 
 // ── SETTINGS ─────────────────────────────────────────────────────────────────
 function initSliders() {
-  const sliders = [
-    { id: 'sl-diamond',      valId: 'val-diamond-risk',   key: 'diamondRisk' },
-    { id: 'sl-gold',         valId: 'val-gold-risk',      key: 'goldRisk' },
-    { id: 'sl-silver',       valId: 'val-silver-risk',    key: 'silverRisk' },
-    { id: 'sl-diamond-conv', valId: 'val-diamond-conv',   key: 'diamondConviction' },
-    { id: 'sl-gold-conv',    valId: 'val-gold-conv',      key: 'goldConviction' },
-    { id: 'sl-silver-conv',  valId: 'val-silver-conv',    key: 'silverConviction' },
-    { id: 'sl-daily-loss',   valId: 'val-daily-loss',     key: 'dailyLossLimit' },
-  ];
-  sliders.forEach(({ id, valId }) => {
+  [
+    ['sl-diamond',      'val-diamond-risk'],
+    ['sl-gold',         'val-gold-risk'],
+    ['sl-silver',       'val-silver-risk'],
+    ['sl-diamond-conv', 'val-diamond-conv'],
+    ['sl-gold-conv',    'val-gold-conv'],
+    ['sl-silver-conv',  'val-silver-conv'],
+    ['sl-daily-loss',   'val-daily-loss'],
+  ].forEach(([id, valId]) => {
     const el = $(id);
     if (!el) return;
     el.addEventListener('input', () => { $(valId).textContent = el.value; });
@@ -236,62 +454,44 @@ $('btn-save-settings')?.addEventListener('click', async () => {
     liveMode:          state.settings.liveMode,
   };
   try {
-    await api('/api/settings/update', { method: 'POST', body: JSON.stringify(body) });
+    await apiFetch('/api/settings/update', { method: 'POST', body: JSON.stringify(body) });
     showMsg('settings-msg', 'Settings saved');
   } catch {
     showMsg('settings-msg', 'Save failed', true);
   }
 });
 
-// ── SCAN NOW ──────────────────────────────────────────────────────────────────
-$('btn-scan-now')?.addEventListener('click', async () => {
-  $('btn-scan-now').textContent = 'Scanning...';
-  $('btn-scan-now').disabled = true;
-  try {
-    const r = await api('/api/scan/manual', { method: 'POST' });
-    $('btn-scan-now').textContent = `Done — ${r.signals} signal(s)`;
-  } catch {
-    $('btn-scan-now').textContent = 'Error';
-  }
-  setTimeout(() => { $('btn-scan-now').textContent = 'Manual Scan Now'; $('btn-scan-now').disabled = false; }, 3000);
-});
-
 // ── LEARNING ─────────────────────────────────────────────────────────────────
 async function loadLearning() {
   try {
-    const results = await api('/api/learning/results');
+    const results   = await apiFetch('/api/learning/results');
     const container = $('learning-results');
     if (!results.length) {
       container.innerHTML = '<p class="empty">No learning cycles completed yet.</p>';
       return;
     }
-
-    // Group by analysis_date
     const byDate = {};
     for (const r of results) {
       const key = r.analysis_date?.split('T')[0] || 'unknown';
       if (!byDate[key]) byDate[key] = [];
       byDate[key].push(r);
     }
-
     container.innerHTML = Object.entries(byDate).slice(0, 5).map(([date, rows]) => {
-      const insights  = JSON.parse(rows[0]?.insights || '[]');
-      const suggested = JSON.parse(rows[0]?.suggested_changes || '[]');
+      const insights  = JSON.parse(rows[0]?.insights           || '[]');
+      const suggested = JSON.parse(rows[0]?.suggested_changes  || '[]');
       return `
         <div class="learning-cycle">
           <h4>Cycle: ${date}</h4>
-          <strong style="font-size:.7rem;color:var(--muted)">INSIGHTS</strong>
-          <ul class="insight-list">
-            ${insights.map(i => `<li>${i}</li>`).join('')}
-          </ul>
+          <strong style="font-size:.65rem;color:var(--muted)">INSIGHTS</strong>
+          <ul class="insight-list">${insights.map(i => `<li>${i}</li>`).join('')}</ul>
           ${suggested.length ? `
-          <strong style="font-size:.7rem;color:var(--muted);display:block;margin-top:.75rem">SUGGESTED CHANGES</strong>
-          ${suggested.map((s, idx) => `
+          <strong style="font-size:.65rem;color:var(--muted);display:block;margin-top:.75rem">SUGGESTED CHANGES</strong>
+          ${suggested.map(() => `
             <div class="suggestion-card">
-              <p>${s.reason} <em style="color:var(--muted)">(${s.confidence} confidence)</em></p>
+              <p>${suggested[0].reason} <em style="color:var(--muted)">(${suggested[0].confidence})</em></p>
               <div class="suggestion-actions">
-                <button class="btn-primary" onclick="approveSuggestion(${rows[0].id}, true)">Apply</button>
-                <button class="btn-secondary" onclick="approveSuggestion(${rows[0].id}, false)">Reject</button>
+                <button class="btn-primary" onclick="approveSuggestion(${rows[0].id},true)">Apply</button>
+                <button class="btn-secondary" onclick="approveSuggestion(${rows[0].id},false)">Reject</button>
               </div>
             </div>`).join('')}
           ` : ''}
@@ -303,42 +503,43 @@ async function loadLearning() {
 }
 
 window.approveSuggestion = async (id, approved) => {
-  await api('/api/learning/approve', { method: 'POST', body: JSON.stringify({ patternId: id, approved }) });
+  await apiFetch('/api/learning/approve', { method: 'POST', body: JSON.stringify({ patternId: id, approved }) });
   loadLearning();
 };
 
 $('btn-run-learning')?.addEventListener('click', async () => {
-  $('btn-run-learning').textContent = 'Running...';
-  $('btn-run-learning').disabled = true;
+  const btn = $('btn-run-learning');
+  btn.textContent = 'Running…';
+  btn.disabled    = true;
   try {
-    await api('/api/learning/run', { method: 'POST' });
+    await apiFetch('/api/learning/run', { method: 'POST' });
     await loadLearning();
   } catch {}
-  $('btn-run-learning').textContent = 'Run Now';
-  $('btn-run-learning').disabled = false;
+  btn.textContent = 'Run Now';
+  btn.disabled    = false;
 });
 
 // ── TELEGRAM ─────────────────────────────────────────────────────────────────
 $('btn-tg-test')?.addEventListener('click', async () => {
-  $('btn-tg-test').textContent = 'Sending...';
+  const btn = $('btn-tg-test');
+  btn.textContent = 'Sending…';
   try {
-    const r = await api('/api/telegram/test', { method: 'POST' });
+    const r = await apiFetch('/api/telegram/test', { method: 'POST' });
     showMsg('tg-msg', r.success ? 'Test message sent' : 'Failed — check token/group');
     setDot('tg-status-dot', r.connected);
-    $('tg-status-text') && ($('tg-status-text').textContent = r.connected ? 'Connected' : 'Disconnected');
+    if ($('tg-status-text')) $('tg-status-text').textContent = r.connected ? 'Connected' : 'Disconnected';
   } catch {
     showMsg('tg-msg', 'Request failed', true);
   }
-  $('btn-tg-test').textContent = 'Test Send';
+  btn.textContent = 'Test Send';
 });
 
 // ── SUBSCRIBERS ───────────────────────────────────────────────────────────────
 async function loadSubscribers() {
   try {
-    const data = await api('/api/subscribers');
-    $('sub-count').textContent   = data.total || 0;
+    const data  = await apiFetch('/api/subscribers');
+    $('sub-count').textContent   = data.total    || 0;
     $('sub-revenue').textContent = `$${data.revenue || 0}`;
-
     const tbody = $('sub-table-body');
     if (!data.subscribers?.length) {
       tbody.innerHTML = '<tr><td colspan="5" class="empty">No subscribers yet</td></tr>';
@@ -350,27 +551,25 @@ async function loadSubscribers() {
         <td>${s.tier}</td>
         <td>${s.joined_date ? new Date(s.joined_date).toLocaleDateString() : '—'}</td>
         <td class="${s.status === 'active' ? 'badge-win' : 'badge-loss'}">${s.status}</td>
-        <td><button onclick="removeSub(${s.id})" style="background:none;border:none;color:var(--red);cursor:pointer;font-family:inherit">Remove</button></td>
+        <td><button onclick="removeSub(${s.id})" style="background:none;border:none;color:var(--red);cursor:pointer;font-family:inherit;font-size:.7rem">Remove</button></td>
       </tr>`).join('');
   } catch {}
 }
 
-$('btn-add-sub')?.addEventListener('click', () => {
-  $('add-sub-form').classList.toggle('hidden');
-});
+$('btn-add-sub')?.addEventListener('click', () => $('add-sub-form').classList.toggle('hidden'));
 
 $('btn-sub-save')?.addEventListener('click', async () => {
   const email = $('sub-email')?.value?.trim();
   const tier  = $('sub-tier')?.value;
   if (!email) return;
-  await api('/api/subscribers/add', { method: 'POST', body: JSON.stringify({ email, tier }) });
+  await apiFetch('/api/subscribers/add', { method: 'POST', body: JSON.stringify({ email, tier }) });
   $('add-sub-form').classList.add('hidden');
   $('sub-email').value = '';
   loadSubscribers();
 });
 
-window.removeSub = async (id) => {
-  await api(`/api/subscribers/${id}`, { method: 'DELETE' });
+window.removeSub = async id => {
+  await apiFetch(`/api/subscribers/${id}`, { method: 'DELETE' });
   loadSubscribers();
 };
 
@@ -378,7 +577,7 @@ window.removeSub = async (id) => {
 async function loadLogs() {
   try {
     const type = state.logFilter !== 'all' ? `?type=${state.logFilter}` : '';
-    const logs = await api(`/api/logs${type}`);
+    const logs = await apiFetch(`/api/logs${type}`);
     const list = $('logs-list');
     if (!logs.length) { list.innerHTML = '<p class="empty">No logs yet</p>'; return; }
     list.innerHTML = logs.map(l => `
@@ -399,10 +598,10 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
   });
 });
 
-// ── MT4/MT5 BROKER ───────────────────────────────────────────────────────────
+// ── BROKER ───────────────────────────────────────────────────────────────────
 async function loadBroker() {
   try {
-    const r = await api('/api/broker/status');
+    const r = await apiFetch('/api/broker/status');
     setDot('ct-status-dot', r.connected);
     $('ct-status-text').textContent = r.connected ? 'Connected' : 'Disconnected';
     $('ct-platform').textContent    = r.platform ? r.platform.toUpperCase() : '';
@@ -414,25 +613,17 @@ async function loadBroker() {
 }
 
 $('btn-ct-reconnect')?.addEventListener('click', async () => {
-  $('btn-ct-reconnect').textContent = 'Reconnecting...';
-  $('btn-ct-reconnect').disabled = true;
+  const btn = $('btn-ct-reconnect');
+  btn.textContent = 'Reconnecting…';
+  btn.disabled    = true;
   try {
-    const r = await api('/api/broker/reconnect', { method: 'POST' });
+    const r = await apiFetch('/api/broker/reconnect', { method: 'POST' });
     setDot('ct-status-dot', r.connected);
     $('ct-status-text').textContent = r.connected ? 'Connected' : 'Disconnected';
   } catch {}
-  $('btn-ct-reconnect').textContent = 'Reconnect';
-  $('btn-ct-reconnect').disabled = false;
+  btn.textContent = 'Reconnect';
+  btn.disabled    = false;
 });
-
-// ── UTIL ─────────────────────────────────────────────────────────────────────
-function showMsg(id, text, isErr = false) {
-  const el = $(id);
-  if (!el) return;
-  el.textContent = text;
-  el.className = 'msg' + (isErr ? ' err' : '');
-  setTimeout(() => { el.textContent = ''; }, 4000);
-}
 
 // ── INIT ─────────────────────────────────────────────────────────────────────
 async function init() {
@@ -441,19 +632,27 @@ async function init() {
 
   // Load settings from backend
   try {
-    const s = await api('/api/settings');
-    if (s.diamondRisk)    { $('sl-diamond').value = s.diamondRisk;     $('val-diamond-risk').textContent = s.diamondRisk; }
-    if (s.goldRisk)       { $('sl-gold').value = s.goldRisk;           $('val-gold-risk').textContent = s.goldRisk; }
-    if (s.silverRisk)     { $('sl-silver').value = s.silverRisk;       $('val-silver-risk').textContent = s.silverRisk; }
-    if (s.dailyLossLimit) { $('sl-daily-loss').value = s.dailyLossLimit; $('val-daily-loss').textContent = s.dailyLossLimit; }
+    const s = await apiFetch('/api/settings');
+    if (s.diamondRisk)    { $('sl-diamond').value = s.diamondRisk;          $('val-diamond-risk').textContent = s.diamondRisk; }
+    if (s.goldRisk)       { $('sl-gold').value    = s.goldRisk;             $('val-gold-risk').textContent    = s.goldRisk; }
+    if (s.silverRisk)     { $('sl-silver').value  = s.silverRisk;           $('val-silver-risk').textContent  = s.silverRisk; }
+    if (s.dailyLossLimit) { $('sl-daily-loss').value = s.dailyLossLimit;    $('val-daily-loss').textContent   = s.dailyLossLimit; }
     state.settings = s;
     toggleBtn('set-live-mode', s.liveMode);
   } catch {}
 
+  // First status poll
   await pollStatus();
   await loadRecentTrades();
 
-  // Poll every 30 seconds
+  // Init dashboard chart after a short delay (let TV script load)
+  setTimeout(initDashChart, 1500);
+
+  // Countdown every second
+  updateCountdown();
+  setInterval(updateCountdown, 1000);
+
+  // Poll status every 20 seconds
   setInterval(async () => {
     await pollStatus();
     if (document.querySelector('.tab-btn[data-tab="dashboard"].active')) {
@@ -463,7 +662,13 @@ async function init() {
       await loadOpenPositions();
       await loadRecentTrades();
     }
-  }, 30000);
+  }, 20000);
+
+  // Refresh logs/signals every 60s if those tabs are open
+  setInterval(() => {
+    if (document.querySelector('.tab-btn[data-tab="logs"].active'))    loadLogs();
+    if (document.querySelector('.tab-btn[data-tab="signals"].active')) loadSignals();
+  }, 60000);
 }
 
 init();

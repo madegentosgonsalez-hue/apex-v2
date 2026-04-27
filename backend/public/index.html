@@ -5,19 +5,36 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>APEX V2</title>
   <link rel="stylesheet" href="style.css">
+  <script src="https://s3.tradingview.com/tv.js" async></script>
 </head>
 <body>
   <header>
     <div class="logo">APEX <span>V2</span></div>
+    <div class="header-center">
+      <span class="pulse-dot" id="pulse-dot" title="System online"></span>
+      <span id="brain-label" class="brain-label">IDLE</span>
+      <span class="sep">|</span>
+      <span class="countdown-label">Next scan</span>
+      <span id="countdown" class="countdown">--:--</span>
+    </div>
     <div class="header-status">
-      <span id="hdr-ctrader" class="dot red" title="cTrader"></span>
+      <span id="hdr-broker" class="dot red" title="Broker"></span>
       <span id="hdr-telegram" class="dot red" title="Telegram"></span>
       <span id="hdr-time" class="sydney-time"></span>
     </div>
   </header>
 
+  <!-- status bar: which pairs are active -->
+  <div id="status-bar" class="status-bar">
+    <span class="status-bar-label">Scanning:</span>
+    <span id="active-pairs-bar">—</span>
+    <span class="status-bar-right" id="last-scan-bar"></span>
+  </div>
+
   <nav>
     <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="charts">Charts</button>
+    <button class="tab-btn" data-tab="signals">Signals</button>
     <button class="tab-btn" data-tab="trading">Trading</button>
     <button class="tab-btn" data-tab="analyzer">Analyzer</button>
     <button class="tab-btn" data-tab="pairs">Pairs</button>
@@ -58,10 +75,11 @@
           <div class="stat-value small" id="s-last-signal">—</div>
         </div>
       </div>
+
       <div class="connection-row">
         <div class="conn-item">
-          <span id="d-ctrader-dot" class="dot red"></span>
-          <span>cTrader</span>
+          <span id="d-broker-dot" class="dot red"></span>
+          <span>Broker</span>
         </div>
         <div class="conn-item">
           <span id="d-telegram-dot" class="dot red"></span>
@@ -69,14 +87,70 @@
         </div>
         <div class="conn-item">
           <span>Auto-Execute:</span>
-          <span id="d-auto-exec" class="badge">OFF</span>
+          <span id="d-auto-exec" class="badge off">OFF</span>
+        </div>
+        <div class="conn-item">
+          <span>Mode:</span>
+          <span id="d-mode" class="badge off">PAPER</span>
         </div>
       </div>
-      <h3>Recent Trades</h3>
+
+      <!-- mini chart on dashboard -->
+      <div class="dash-chart-header">
+        <h3>Live Chart</h3>
+        <select id="dash-chart-pair" class="pair-select">
+          <option value="FX:EURUSD">EURUSD</option>
+          <option value="TVC:GOLD">XAUUSD</option>
+          <option value="FX:GBPUSD">GBPUSD</option>
+          <option value="FX:USDJPY">USDJPY</option>
+          <option value="FX:AUDUSD">AUDUSD</option>
+          <option value="FX:USDCAD">USDCAD</option>
+        </select>
+      </div>
+      <div id="dash-tv-container" class="tv-container tv-mini"></div>
+
+      <h3 style="margin-top:1.5rem">Recent Trades</h3>
       <table id="recent-trades-table">
         <thead><tr><th>Pair</th><th>Dir</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>R</th><th>Time</th></tr></thead>
         <tbody id="recent-trades-body"><tr><td colspan="7" class="empty">No trades yet</td></tr></tbody>
       </table>
+    </section>
+
+    <!-- CHARTS -->
+    <section id="tab-charts" class="tab">
+      <div class="charts-toolbar">
+        <select id="chart-pair" class="pair-select">
+          <option value="FX:EURUSD">EURUSD</option>
+          <option value="TVC:GOLD">XAUUSD (Gold)</option>
+          <option value="FX:GBPUSD">GBPUSD</option>
+          <option value="FX:USDJPY">USDJPY</option>
+          <option value="FX:AUDUSD">AUDUSD</option>
+          <option value="FX:USDCAD">USDCAD</option>
+          <option value="FX:NZDUSD">NZDUSD</option>
+          <option value="FX:USDCHF">USDCHF</option>
+          <option value="FX:EURJPY">EURJPY</option>
+          <option value="FX:GBPJPY">GBPJPY</option>
+        </select>
+        <select id="chart-tf" class="pair-select">
+          <option value="15">M15</option>
+          <option value="60" selected>H1</option>
+          <option value="240">H4</option>
+          <option value="D">D1</option>
+        </select>
+        <button id="btn-load-chart" class="btn-primary">Load Chart</button>
+      </div>
+      <div id="main-tv-container" class="tv-container tv-full"></div>
+    </section>
+
+    <!-- SIGNALS -->
+    <section id="tab-signals" class="tab">
+      <div class="signals-header">
+        <h3>Active Signals</h3>
+        <button id="btn-refresh-signals" class="btn-secondary">Refresh</button>
+      </div>
+      <div id="signals-list" class="signals-list">
+        <p class="empty">No active signals</p>
+      </div>
     </section>
 
     <!-- TRADING -->
@@ -104,9 +178,10 @@
     <!-- ANALYZER -->
     <section id="tab-analyzer" class="tab">
       <div class="analyzer-header">
-        <span>Brain1 scanning every 15 minutes</span>
+        <span>Brain1 scanning every 15 minutes · London &amp; NY sessions only</span>
         <button id="btn-scan-now" class="btn-primary">Manual Scan Now</button>
       </div>
+      <div id="scan-msg" class="msg" style="margin-bottom:.75rem"></div>
       <div id="analyzer-grid" class="analyzer-grid"></div>
     </section>
 
@@ -115,32 +190,56 @@
       <h3>Active Pairs</h3>
       <div id="pairs-grid" class="pairs-grid"></div>
       <button id="btn-save-pairs" class="btn-primary" style="margin-top:1rem">Save Pairs</button>
+      <div id="pairs-msg" class="msg"></div>
     </section>
 
     <!-- SETTINGS -->
     <section id="tab-settings" class="tab">
       <div class="settings-form">
         <h3>Risk per Trade</h3>
-        <div class="slider-row"><label>Diamond Risk <span id="val-diamond-risk">1.0</span>%</label><input type="range" id="sl-diamond" min="0.5" max="2" step="0.25" value="1.0"></div>
-        <div class="slider-row"><label>Gold Risk <span id="val-gold-risk">0.75</span>%</label><input type="range" id="sl-gold" min="0.5" max="2" step="0.25" value="0.75"></div>
-        <div class="slider-row"><label>Silver Risk <span id="val-silver-risk">0.5</span>%</label><input type="range" id="sl-silver" min="0.5" max="2" step="0.25" value="0.5"></div>
+        <div class="slider-row">
+          <label>Diamond Risk &nbsp;<span id="val-diamond-risk">1.0</span>%</label>
+          <input type="range" id="sl-diamond" min="0.5" max="2" step="0.25" value="1.0">
+        </div>
+        <div class="slider-row">
+          <label>Gold Risk &nbsp;<span id="val-gold-risk">0.75</span>%</label>
+          <input type="range" id="sl-gold" min="0.5" max="2" step="0.25" value="0.75">
+        </div>
+        <div class="slider-row">
+          <label>Silver Risk &nbsp;<span id="val-silver-risk">0.5</span>%</label>
+          <input type="range" id="sl-silver" min="0.5" max="2" step="0.25" value="0.5">
+        </div>
 
         <h3>AI Conviction Thresholds</h3>
-        <div class="slider-row"><label>Diamond <span id="val-diamond-conv">88</span>%</label><input type="range" id="sl-diamond-conv" min="70" max="95" step="1" value="88"></div>
-        <div class="slider-row"><label>Gold <span id="val-gold-conv">75</span>%</label><input type="range" id="sl-gold-conv" min="60" max="90" step="1" value="75"></div>
-        <div class="slider-row"><label>Silver <span id="val-silver-conv">65</span>%</label><input type="range" id="sl-silver-conv" min="55" max="85" step="1" value="65"></div>
+        <div class="slider-row">
+          <label>Diamond &nbsp;<span id="val-diamond-conv">88</span>%</label>
+          <input type="range" id="sl-diamond-conv" min="70" max="95" step="1" value="88">
+        </div>
+        <div class="slider-row">
+          <label>Gold &nbsp;<span id="val-gold-conv">75</span>%</label>
+          <input type="range" id="sl-gold-conv" min="60" max="90" step="1" value="75">
+        </div>
+        <div class="slider-row">
+          <label>Silver &nbsp;<span id="val-silver-conv">65</span>%</label>
+          <input type="range" id="sl-silver-conv" min="55" max="85" step="1" value="65">
+        </div>
 
         <h3>Risk Management</h3>
-        <div class="slider-row"><label>Daily Loss Limit <span id="val-daily-loss">4</span></label><input type="range" id="sl-daily-loss" min="1" max="6" step="1" value="4"></div>
+        <div class="slider-row">
+          <label>Daily Loss Limit &nbsp;<span id="val-daily-loss">4</span> trades</label>
+          <input type="range" id="sl-daily-loss" min="1" max="6" step="1" value="4">
+        </div>
 
         <h3>Mode</h3>
         <div class="toggle-row"><label>Auto-Execute</label><button id="set-auto-exec" class="toggle-btn off">OFF</button></div>
         <div class="toggle-row"><label>Manual Review</label><button id="set-manual-review" class="toggle-btn on">ON</button></div>
         <div class="toggle-row"><label>Live Mode</label><button id="set-live-mode" class="toggle-btn off">OFF (Demo)</button></div>
 
-        <div class="info-row"><span>Timezone:</span><span>Australia/Sydney (AEDT/AEST)</span></div>
+        <div class="info-row"><span>Timezone</span><span>Australia/Sydney (AEDT/AEST)</span></div>
+        <div class="info-row"><span>Scan interval</span><span>Every 15 minutes</span></div>
+        <div class="info-row"><span>Learning cycle</span><span>Monday 16:00 Sydney</span></div>
 
-        <button id="btn-save-settings" class="btn-primary">Save Settings</button>
+        <button id="btn-save-settings" class="btn-primary" style="margin-top:1.25rem">Save Settings</button>
         <div id="settings-msg" class="msg"></div>
       </div>
     </section>
@@ -148,7 +247,7 @@
     <!-- LEARNING -->
     <section id="tab-learning" class="tab">
       <div class="learning-header">
-        <span>Runs every Monday 16:00 Sydney time</span>
+        <span>Runs every Monday 16:00 Sydney time · Never auto-applied</span>
         <button id="btn-run-learning" class="btn-secondary">Run Now</button>
       </div>
       <div id="learning-results">
@@ -160,8 +259,8 @@
     <section id="tab-telegram" class="tab">
       <div class="settings-form">
         <h3>Telegram Configuration</h3>
-        <div class="field-row"><label>Bot Token</label><input type="password" id="tg-token" placeholder="8516441..."></div>
-        <div class="field-row"><label>Group ID</label><input type="text" id="tg-group" placeholder="-100..."></div>
+        <div class="field-row"><label>Bot Token</label><input type="password" id="tg-token" placeholder="851644..."></div>
+        <div class="field-row"><label>Group ID</label><input type="text" id="tg-group" placeholder="717918403"></div>
         <div class="field-row">
           <label>Format</label>
           <select id="tg-format">
@@ -207,6 +306,7 @@
         <button class="filter-btn" data-filter="signal">Signal</button>
         <button class="filter-btn" data-filter="trade">Trade</button>
         <button class="filter-btn" data-filter="error">Error</button>
+        <button class="filter-btn" data-filter="learning">Learning</button>
       </div>
       <div id="logs-list" class="logs-list"></div>
     </section>
@@ -224,12 +324,12 @@
         <div class="info-row"><span>Balance</span><span id="ct-balance">—</span></div>
         <div class="info-row"><span>Equity</span><span id="ct-equity">—</span></div>
         <div class="info-row"><span>Last Sync</span><span id="ct-last-sync">—</span></div>
-        <div style="margin-top:1rem;padding:.75rem;background:var(--surface);border:1px solid var(--border);font-size:.75rem;color:var(--muted);line-height:1.6">
-          <strong style="color:var(--text)">Setup via MetaApi.cloud:</strong><br>
+        <div class="broker-setup-box">
+          <strong>Setup via MetaApi.cloud:</strong><br>
           1. Create account at metaapi.cloud<br>
           2. Add your MT4/MT5 broker account → get Account ID<br>
           3. Copy your MetaApi token<br>
-          4. Add to .env: META_API_TOKEN, META_API_ACCOUNT_ID, MT_PLATFORM (mt4 or mt5)
+          4. Add to Railway env vars: META_API_TOKEN, META_API_ACCOUNT_ID, MT_PLATFORM
         </div>
         <div class="btn-row">
           <button id="btn-ct-reconnect" class="btn-primary">Reconnect</button>
