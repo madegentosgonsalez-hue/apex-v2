@@ -96,8 +96,8 @@ class Brain1 {
   async _prefilter(symbol) {
     let pair = null;
     try { pair = await this.db.getPair(symbol); } catch {}
-    // If pairs table missing or pair not found, treat as active FOREX pair
-    if (pair && pair.active === false) return { pass: false, reason: 'Pair not active', newsClear: false };
+    // pair.active is ignored — server.js activePairs array already controls which
+    // pairs are scanned, so checking DB active flag here is redundant duplicate state.
 
     const session = this._sessionCheck(pair?.session_type || 'FOREX');
     if (!session.active) return { pass: false, reason: `Session closed (${session.reason})`, newsClear: true };
