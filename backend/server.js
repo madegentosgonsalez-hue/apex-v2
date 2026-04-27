@@ -81,8 +81,8 @@ cron.schedule('*/15 * * * *', async () => {
   for (const pair of activePairs) {
     try {
       const signal = await brain1.scan(pair);
-      if (signal && signal.type !== 'NONE') {
-        sysLog('signal', `Signal: ${signal.tier} ${signal.type} on ${pair}`, pair, signal.tier);
+      if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
+        sysLog('signal', `Signal: ${signal.confidence_tier} ${signal.direction} on ${pair}`, pair, signal.confidence_tier);
         await handleSignal(signal, pair);
       }
     } catch (err) {
@@ -134,16 +134,16 @@ cron.schedule('0 * * * *', async () => {
 async function handleSignal(signal, pair) {
   // Always send to Telegram
   await telegram.sendSignal(
-    signal.type, pair, signal.tier,
-    signal.entry, signal.sl, signal.tp1, signal.tp2,
-    signal.reason
+    signal.direction, pair, signal.confidence_tier,
+    signal.entry_price, signal.stop_loss, signal.tp1, signal.tp2,
+    signal.regime
   );
 
   if (!settings.autoExecute) return;
 
   // Auto-execute on cTrader
   const riskMap = { DIAMOND: settings.diamondRisk, GOLD: settings.goldRisk, SILVER: settings.silverRisk };
-  const risk = riskMap[signal.tier] || 0.5;
+  const risk = riskMap[signal.confidence_tier] || 0.5;
 
   try {
     const order = await ctrader.placeOrder(
@@ -209,7 +209,7 @@ app.get('/api/status', async (req, res) => {
       dailyLosses:       parseInt(losses.rows?.[0]?.count || 0),
       dailyLossLimit:    settings.dailyLossLimit,
       winRate7d:         winPct,
-      lastSignal:        last ? { pair: last.symbol, direction: last.type, tier: last.tier, timestamp: last.created_at } : null,
+      lastSignal:        last ? { pair: last.symbol, direction: last.direction, tier: last.confidence_tier, timestamp: last.created_at } : null,
       brokerConnected:   ctrader.isConnected(),
       brokerPlatform:    process.env.MT_PLATFORM || 'mt5',
       telegramConnected: telegram.connected,
@@ -254,9 +254,9 @@ app.post('/api/scan/manual', async (req, res) => {
   for (const pair of activePairs) {
     try {
       const signal = await brain1.scan(pair);
-      results.push({ pair, signal: signal?.tier || 'NONE' });
-      if (signal && signal.type !== 'NONE') {
-        sysLog('signal', `Manual scan signal: ${signal.tier} on ${pair}`, pair);
+      results.push({ pair, signal: signal?.confidence_tier || 'NONE' });
+      if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
+        sysLog('signal', `Manual scan signal: ${signal.confidence_tier} on ${pair}`, pair);
         await handleSignal(signal, pair);
       }
     } catch (err) {
