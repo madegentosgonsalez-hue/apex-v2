@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>APEX V2</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="logo">APEX <span>V2</span></div>
+    <div class="header-status">
+      <span id="hdr-ctrader" class="dot red" title="cTrader"></span>
+      <span id="hdr-telegram" class="dot red" title="Telegram"></span>
+      <span id="hdr-time" class="sydney-time"></span>
+    </div>
+  </header>
+
+  <nav>
+    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="trading">Trading</button>
+    <button class="tab-btn" data-tab="analyzer">Analyzer</button>
+    <button class="tab-btn" data-tab="pairs">Pairs</button>
+    <button class="tab-btn" data-tab="settings">Settings</button>
+    <button class="tab-btn" data-tab="learning">Learning</button>
+    <button class="tab-btn" data-tab="telegram">Telegram</button>
+    <button class="tab-btn" data-tab="subscribers">Subscribers</button>
+    <button class="tab-btn" data-tab="logs">Logs</button>
+    <button class="tab-btn" data-tab="broker">MT4/MT5</button>
+  </nav>
+
+  <main>
+    <!-- DASHBOARD -->
+    <section id="tab-dashboard" class="tab active">
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Balance</div>
+          <div class="stat-value" id="s-balance">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Today P&amp;L</div>
+          <div class="stat-value" id="s-pnl">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Win Rate (7d)</div>
+          <div class="stat-value" id="s-wr">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Daily Losses</div>
+          <div class="stat-value" id="s-losses">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Open Positions</div>
+          <div class="stat-value" id="s-open">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Last Signal</div>
+          <div class="stat-value small" id="s-last-signal">—</div>
+        </div>
+      </div>
+      <div class="connection-row">
+        <div class="conn-item">
+          <span id="d-ctrader-dot" class="dot red"></span>
+          <span>cTrader</span>
+        </div>
+        <div class="conn-item">
+          <span id="d-telegram-dot" class="dot red"></span>
+          <span>Telegram</span>
+        </div>
+        <div class="conn-item">
+          <span>Auto-Execute:</span>
+          <span id="d-auto-exec" class="badge">OFF</span>
+        </div>
+      </div>
+      <h3>Recent Trades</h3>
+      <table id="recent-trades-table">
+        <thead><tr><th>Pair</th><th>Dir</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>R</th><th>Time</th></tr></thead>
+        <tbody id="recent-trades-body"><tr><td colspan="7" class="empty">No trades yet</td></tr></tbody>
+      </table>
+    </section>
+
+    <!-- TRADING -->
+    <section id="tab-trading" class="tab">
+      <div class="toggle-row">
+        <label>Auto-Execute</label>
+        <button id="toggle-auto" class="toggle-btn off">OFF</button>
+      </div>
+      <div class="toggle-row">
+        <label>Manual Review</label>
+        <button id="toggle-manual" class="toggle-btn on">ON</button>
+      </div>
+      <h3>Open Positions</h3>
+      <table>
+        <thead><tr><th>Pair</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th><th>Size</th><th>P&amp;L</th></tr></thead>
+        <tbody id="open-positions-body"><tr><td colspan="7" class="empty">No open positions</td></tr></tbody>
+      </table>
+      <h3>Last 10 Trades</h3>
+      <table>
+        <thead><tr><th>Pair</th><th>Dir</th><th>Outcome</th><th>R</th><th>Exit Reason</th></tr></thead>
+        <tbody id="last10-body"><tr><td colspan="5" class="empty">No trades yet</td></tr></tbody>
+      </table>
+    </section>
+
+    <!-- ANALYZER -->
+    <section id="tab-analyzer" class="tab">
+      <div class="analyzer-header">
+        <span>Brain1 scanning every 15 minutes</span>
+        <button id="btn-scan-now" class="btn-primary">Manual Scan Now</button>
+      </div>
+      <div id="analyzer-grid" class="analyzer-grid"></div>
+    </section>
+
+    <!-- PAIRS -->
+    <section id="tab-pairs" class="tab">
+      <h3>Active Pairs</h3>
+      <div id="pairs-grid" class="pairs-grid"></div>
+      <button id="btn-save-pairs" class="btn-primary" style="margin-top:1rem">Save Pairs</button>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="tab-settings" class="tab">
+      <div class="settings-form">
+        <h3>Risk per Trade</h3>
+        <div class="slider-row"><label>Diamond Risk <span id="val-diamond-risk">1.0</span>%</label><input type="range" id="sl-diamond" min="0.5" max="2" step="0.25" value="1.0"></div>
+        <div class="slider-row"><label>Gold Risk <span id="val-gold-risk">0.75</span>%</label><input type="range" id="sl-gold" min="0.5" max="2" step="0.25" value="0.75"></div>
+        <div class="slider-row"><label>Silver Risk <span id="val-silver-risk">0.5</span>%</label><input type="range" id="sl-silver" min="0.5" max="2" step="0.25" value="0.5"></div>
+
+        <h3>AI Conviction Thresholds</h3>
+        <div class="slider-row"><label>Diamond <span id="val-diamond-conv">88</span>%</label><input type="range" id="sl-diamond-conv" min="70" max="95" step="1" value="88"></div>
+        <div class="slider-row"><label>Gold <span id="val-gold-conv">75</span>%</label><input type="range" id="sl-gold-conv" min="60" max="90" step="1" value="75"></div>
+        <div class="slider-row"><label>Silver <span id="val-silver-conv">65</span>%</label><input type="range" id="sl-silver-conv" min="55" max="85" step="1" value="65"></div>
+
+        <h3>Risk Management</h3>
+        <div class="slider-row"><label>Daily Loss Limit <span id="val-daily-loss">4</span></label><input type="range" id="sl-daily-loss" min="1" max="6" step="1" value="4"></div>
+
+        <h3>Mode</h3>
+        <div class="toggle-row"><label>Auto-Execute</label><button id="set-auto-exec" class="toggle-btn off">OFF</button></div>
+        <div class="toggle-row"><label>Manual Review</label><button id="set-manual-review" class="toggle-btn on">ON</button></div>
+        <div class="toggle-row"><label>Live Mode</label><button id="set-live-mode" class="toggle-btn off">OFF (Demo)</button></div>
+
+        <div class="info-row"><span>Timezone:</span><span>Australia/Sydney (AEDT/AEST)</span></div>
+
+        <button id="btn-save-settings" class="btn-primary">Save Settings</button>
+        <div id="settings-msg" class="msg"></div>
+      </div>
+    </section>
+
+    <!-- LEARNING -->
+    <section id="tab-learning" class="tab">
+      <div class="learning-header">
+        <span>Runs every Monday 16:00 Sydney time</span>
+        <button id="btn-run-learning" class="btn-secondary">Run Now</button>
+      </div>
+      <div id="learning-results">
+        <p class="empty">No learning cycles completed yet.</p>
+      </div>
+    </section>
+
+    <!-- TELEGRAM -->
+    <section id="tab-telegram" class="tab">
+      <div class="settings-form">
+        <h3>Telegram Configuration</h3>
+        <div class="field-row"><label>Bot Token</label><input type="password" id="tg-token" placeholder="8516441..."></div>
+        <div class="field-row"><label>Group ID</label><input type="text" id="tg-group" placeholder="-100..."></div>
+        <div class="field-row">
+          <label>Format</label>
+          <select id="tg-format">
+            <option value="full">Full</option>
+            <option value="minimal">Minimal</option>
+          </select>
+        </div>
+        <div class="conn-item" style="margin:1rem 0">
+          <span id="tg-status-dot" class="dot red"></span>
+          <span id="tg-status-text">Disconnected</span>
+        </div>
+        <button id="btn-tg-test" class="btn-primary">Test Send</button>
+        <div id="tg-msg" class="msg"></div>
+      </div>
+    </section>
+
+    <!-- SUBSCRIBERS -->
+    <section id="tab-subscribers" class="tab">
+      <div class="sub-header">
+        <div>
+          <span class="stat-value" id="sub-count">0</span>
+          <span class="stat-label"> subscribers &nbsp;|&nbsp; </span>
+          <span class="stat-value" id="sub-revenue">$0</span>
+          <span class="stat-label">/month</span>
+        </div>
+        <button id="btn-add-sub" class="btn-primary">Add New</button>
+      </div>
+      <div id="add-sub-form" class="add-form hidden">
+        <input type="email" id="sub-email" placeholder="email@example.com">
+        <select id="sub-tier"><option value="free">Free</option><option value="premium">Premium ($10/mo)</option></select>
+        <button id="btn-sub-save" class="btn-primary">Save</button>
+      </div>
+      <table>
+        <thead><tr><th>Email</th><th>Tier</th><th>Joined</th><th>Status</th><th></th></tr></thead>
+        <tbody id="sub-table-body"><tr><td colspan="5" class="empty">No subscribers yet</td></tr></tbody>
+      </table>
+    </section>
+
+    <!-- LOGS -->
+    <section id="tab-logs" class="tab">
+      <div class="log-filter">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="signal">Signal</button>
+        <button class="filter-btn" data-filter="trade">Trade</button>
+        <button class="filter-btn" data-filter="error">Error</button>
+      </div>
+      <div id="logs-list" class="logs-list"></div>
+    </section>
+
+    <!-- MT4/MT5 -->
+    <section id="tab-broker" class="tab">
+      <div class="settings-form">
+        <h3>MT4 / MT5 Account</h3>
+        <div class="conn-item" style="margin-bottom:1rem">
+          <span id="ct-status-dot" class="dot red"></span>
+          <span id="ct-status-text">Disconnected</span>
+          <span id="ct-platform" style="color:var(--muted);font-size:.75rem;margin-left:.5rem"></span>
+        </div>
+        <div class="info-row"><span>MetaApi Account ID</span><span id="ct-account-id">—</span></div>
+        <div class="info-row"><span>Balance</span><span id="ct-balance">—</span></div>
+        <div class="info-row"><span>Equity</span><span id="ct-equity">—</span></div>
+        <div class="info-row"><span>Last Sync</span><span id="ct-last-sync">—</span></div>
+        <div style="margin-top:1rem;padding:.75rem;background:var(--surface);border:1px solid var(--border);font-size:.75rem;color:var(--muted);line-height:1.6">
+          <strong style="color:var(--text)">Setup via MetaApi.cloud:</strong><br>
+          1. Create account at metaapi.cloud<br>
+          2. Add your MT4/MT5 broker account → get Account ID<br>
+          3. Copy your MetaApi token<br>
+          4. Add to .env: META_API_TOKEN, META_API_ACCOUNT_ID, MT_PLATFORM (mt4 or mt5)
+        </div>
+        <div class="btn-row">
+          <button id="btn-ct-reconnect" class="btn-primary">Reconnect</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
