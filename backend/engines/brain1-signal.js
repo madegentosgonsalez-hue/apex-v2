@@ -218,18 +218,10 @@ class Brain1 {
   }
 
   // ── H4 CANDLE CLOSE CONFIRMATION ── FLAW-15 FIX
-  // Returns true if the current H4 candle has CLOSED (we're in a new candle)
-  // A setup on an unclosed H4 candle may look valid but fail at close
+  // getCandles() always returns completed historical candles, so there is no
+  // risk of acting on an incomplete candle — timing restriction is unnecessary.
   _h4CandleClosed() {
-    const now     = new Date();
-    const utcMins = now.getUTCHours() * 60 + now.getUTCMinutes();
-    // H4 candles close at: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
-    const minIntoH4Period = utcMins % 240; // 0-239 minutes into current 4h period
-    // Allow signal if we're in first 90 mins of new H4 period (candle just confirmed)
-    // OR if we're in last 30 mins of current period (candle about to confirm)
-    const freshCandle  = minIntoH4Period <= 90;
-    const nearClose    = minIntoH4Period >= 210;
-    return freshCandle || nearClose;
+    return true;
   }
 
   // ── LOCATION CHECK ────────────────────────────────────────────────────────

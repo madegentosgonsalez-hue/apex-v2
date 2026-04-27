@@ -81,6 +81,28 @@ function sysLog(type, message, symbol = null, status = null) {
 // ── STARTUP ───────────────────────────────────────────────────────────────────
 async function startup() {
   await db.connect();
+
+  // Ensure pairs table exists and all active pairs are seeded
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS pairs (
+      id SERIAL PRIMARY KEY,
+      symbol VARCHAR(20) UNIQUE NOT NULL,
+      market VARCHAR(20) DEFAULT 'forex',
+      session_type VARCHAR(20) DEFAULT 'FOREX',
+      active BOOLEAN DEFAULT true,
+      pip_size DECIMAL(10,5)
+    )
+  `).catch(() => {});
+
+  for (const sym of activePairs) {
+    await db.query(
+      `INSERT INTO pairs (symbol, session_type, active)
+       VALUES ($1, 'FOREX', true)
+       ON CONFLICT (symbol) DO UPDATE SET active = true`,
+      [sym]
+    ).catch(() => {});
+  }
+
   await ctrader.connect();
   await telegram.testConnection();
   sysLog('system', 'APEX V2 started');
