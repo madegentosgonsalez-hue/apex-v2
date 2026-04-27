@@ -26,7 +26,7 @@ app.use(express.static(require('path').join(__dirname, 'public')));
 
 // ── SERVICE INIT ─────────────────────────────────────────────────────────────
 const db         = new DatabaseService({ connectionString: process.env.DATABASE_URL });
-const data       = new DataService();
+const data       = new DataService({ taapiKey: process.env.TAAPI_API_KEY, twelveDataKey: process.env.TWELVE_DATA_API_KEY });
 const news       = new NewsService();
 const ctrader    = new MT45Service();
 const telegram   = new TelegramService();
@@ -299,14 +299,34 @@ app.get('/api/analyzer', async (req, res) => {
   const result = [];
   for (const pair of activePairs) {
     try {
-      const d = await data.getMarketData(pair, '4h');
-      result.push({ pair, status: 'OK', data: d });
-    } catch {
-      result.push({ pair, status: 'ERROR' });
+      const d = await data.getCandles(pair, '4h', 50);
+      result.push({
+        pair,
+        status: 'OK',
+        data: {
+          regime:       d.adx > 25 ? 'TRENDING' : 'RANGING',
+          session:      getSession(),
+          newsBlackout: false,
+          rsi:          d.rsi?.toFixed(1),
+          adx:          d.adx?.toFixed(1),
+          ema21:        d.ema21?.toFixed(5),
+          ema50:        d.ema50?.toFixed(5),
+        },
+      });
+    } catch (err) {
+      result.push({ pair, status: 'ERROR', error: err.message });
     }
   }
   res.json(result);
 });
+
+function getSession() {
+  const h = new Date().getUTCHours();
+  if (h >= 8  && h < 13) return 'London';
+  if (h >= 13 && h < 21) return 'New York';
+  if (h >= 21 || h < 8)  return 'Asian (skipped)';
+  return 'Off-hours';
+}
 
 // GET /api/pairs
 app.get('/api/pairs', (req, res) => {
