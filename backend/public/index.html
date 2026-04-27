@@ -24,9 +24,11 @@
     </div>
   </header>
 
-  <!-- status bar: which pairs are active -->
+  <!-- activity bar -->
   <div id="status-bar" class="status-bar">
-    <span class="status-bar-label">Scanning:</span>
+    <span class="pulse-dot" id="activity-pulse"></span>
+    <span id="activity-label" style="font-weight:bold;color:#fff;font-size:.8rem;min-width:160px">SYSTEM ONLINE</span>
+    <span class="status-bar-label">Pairs:</span>
     <span id="active-pairs-bar">—</span>
     <span class="status-bar-right" id="last-scan-bar"></span>
   </div>

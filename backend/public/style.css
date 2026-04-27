@@ -2,14 +2,14 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:       #030303;
-  --surface:  #0e0e0e;
-  --border:   #1e1e1e;
+  --bg:       #0a0a0a;
+  --surface:  #141414;
+  --border:   #2a2a2a;
   --primary:  #00d4aa;
-  --text:     #e0e0e0;
-  --muted:    #555;
+  --text:     #ffffff;
+  --muted:    #aaaaaa;
   --green:    #00d4aa;
-  --red:      #ff4444;
+  --red:      #ff5555;
   --gold:     #f5a623;
   --diamond:  #64d2ff;
 }
@@ -63,18 +63,18 @@ header {
   justify-content: center;
 }
 .brain-label {
-  font-size: .7rem;
+  font-size: .75rem;
   letter-spacing: 1.5px;
   text-transform: uppercase;
   color: var(--primary);
   font-weight: bold;
-  min-width: 80px;
+  min-width: 90px;
 }
-.brain-label.idle { color: var(--muted); }
-.sep { color: var(--border); }
-.countdown-label { color: var(--muted); font-size: .7rem; }
+.brain-label.idle { color: #ccc; }
+.sep { color: #444; }
+.countdown-label { color: #bbb; font-size: .7rem; }
 .countdown {
-  font-size: .85rem;
+  font-size: .9rem;
   font-weight: bold;
   color: var(--primary);
   font-variant-numeric: tabular-nums;
@@ -83,23 +83,23 @@ header {
 .countdown.urgent { color: var(--gold); }
 
 .header-status { display: flex; align-items: center; gap: .75rem; }
-.sydney-time { color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.sydney-time { color: #bbb; font-size: .75rem; white-space: nowrap; }
 
 /* ── STATUS BAR ── */
 .status-bar {
   display: flex;
   align-items: center;
-  gap: .75rem;
-  padding: .35rem 1.5rem;
-  background: #080808;
+  gap: 1rem;
+  padding: .5rem 1.5rem;
+  background: #111;
   border-bottom: 1px solid var(--border);
-  font-size: .7rem;
-  color: var(--muted);
+  font-size: .75rem;
+  color: var(--text);
   overflow: hidden;
 }
-.status-bar-label { color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
-#active-pairs-bar { color: var(--primary); font-weight: bold; flex: 1; }
-.status-bar-right { margin-left: auto; color: var(--muted); white-space: nowrap; }
+.status-bar-label { color: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-size: .65rem; }
+#active-pairs-bar { color: #fff; font-weight: bold; flex: 1; letter-spacing: .5px; }
+.status-bar-right { margin-left: auto; color: var(--muted); white-space: nowrap; font-size: .7rem; }
 
 /* ── NAV ── */
 nav {

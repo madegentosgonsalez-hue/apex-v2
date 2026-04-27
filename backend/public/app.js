@@ -183,18 +183,32 @@ async function pollStatus() {
     setDot('hdr-telegram', s.telegramConnected);
     $('hdr-time').textContent = s.sydneyTime || sydneyNow();
 
-    // Brain / scan indicator
+    // Header brain label
     const brainEl = $('brain-label');
     const pulseEl = $('pulse-dot');
     if (brainEl) {
       if (s.scanning && s.activeBrain) {
         brainEl.textContent = s.activeBrain + (s.currentPair ? ` → ${s.currentPair}` : '');
         brainEl.className   = 'brain-label';
-        if (pulseEl) pulseEl.className = 'pulse-dot';
       } else {
         brainEl.textContent = 'ONLINE';
         brainEl.className   = 'brain-label';
-        if (pulseEl) pulseEl.className = 'pulse-dot';
+      }
+    }
+    if (pulseEl) pulseEl.className = 'pulse-dot';
+
+    // Activity bar label (below nav — more visible)
+    const actEl    = $('activity-label');
+    const actPulse = $('activity-pulse');
+    if (actEl) {
+      if (s.scanning && s.activeBrain) {
+        actEl.textContent    = `${s.activeBrain.toUpperCase()} — SCANNING ${s.currentPair || ''}`;
+        actEl.style.color    = '#00d4aa';
+        if (actPulse) actPulse.className = 'pulse-dot';
+      } else {
+        actEl.textContent    = 'SYSTEM ONLINE — WAITING FOR NEXT SCAN';
+        actEl.style.color    = '#ffffff';
+        if (actPulse) actPulse.className = 'pulse-dot';
       }
     }
 
@@ -246,11 +260,14 @@ async function pollStatus() {
     setDot('tg-status-dot', s.telegramConnected);
     if ($('tg-status-text')) $('tg-status-text').textContent = s.telegramConnected ? 'Connected' : 'Disconnected';
   } catch (err) {
-    // System offline — dim pulse
-    const pulseEl = $('pulse-dot');
-    if (pulseEl) pulseEl.className = 'pulse-dot offline';
-    const brainEl = $('brain-label');
-    if (brainEl) { brainEl.textContent = 'OFFLINE'; brainEl.className = 'brain-label idle'; }
+    const pulseEl  = $('pulse-dot');
+    const actPulse = $('activity-pulse');
+    const brainEl  = $('brain-label');
+    const actEl    = $('activity-label');
+    if (pulseEl)  pulseEl.className  = 'pulse-dot offline';
+    if (actPulse) actPulse.className = 'pulse-dot offline';
+    if (brainEl)  { brainEl.textContent = 'OFFLINE'; brainEl.className = 'brain-label idle'; }
+    if (actEl)    { actEl.textContent = 'SYSTEM OFFLINE — CHECK RAILWAY LOGS'; actEl.style.color = '#ff5555'; }
   }
 }
 
