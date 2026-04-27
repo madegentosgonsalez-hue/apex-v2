@@ -22,7 +22,7 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static('../frontend'));
+app.use(express.static(require('path').join(__dirname, 'public')));
 
 // ── SERVICE INIT ─────────────────────────────────────────────────────────────
 const db         = new DatabaseService({ connectionString: process.env.DATABASE_URL });
