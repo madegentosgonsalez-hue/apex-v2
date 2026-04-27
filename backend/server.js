@@ -102,7 +102,8 @@ cron.schedule('*/15 * * * *', async () => {
   for (const pair of activePairs) {
     scanState.currentPair = pair;
     try {
-      const signal = await brain1.scan(pair);
+      const result = await brain1.scan(pair);
+      const signal = result?.signal;
       scanState.completedPairs.push(pair);
       if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
         sysLog('signal', `Signal: ${signal.confidence_tier} ${signal.direction} on ${pair}`, pair, signal.confidence_tier);
@@ -297,9 +298,11 @@ app.post('/api/scan/manual', async (req, res) => {
   for (const pair of activePairs) {
     scanState.currentPair = pair;
     try {
-      const signal = await brain1.scan(pair);
+      const result = await brain1.scan(pair);
+      const signal = result?.signal;
+      const reason = result?.reason;
       scanState.completedPairs.push(pair);
-      results.push({ pair, signal: signal?.confidence_tier || 'NONE' });
+      results.push({ pair, signal: signal?.confidence_tier || 'NONE', reason });
       if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
         sysLog('signal', `Manual scan signal: ${signal.confidence_tier} on ${pair}`, pair);
         await handleSignal(signal, pair);

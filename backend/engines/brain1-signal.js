@@ -94,10 +94,12 @@ class Brain1 {
 
   // ── PRE-FILTER ── FLAW-11 FIX: return newsClear status for signal object
   async _prefilter(symbol) {
-    const pair = await this.db.getPair(symbol);
-    if (!pair?.active) return { pass: false, reason: 'Pair not active', newsClear: false };
+    let pair = null;
+    try { pair = await this.db.getPair(symbol); } catch {}
+    // If pairs table missing or pair not found, treat as active FOREX pair
+    if (pair && pair.active === false) return { pass: false, reason: 'Pair not active', newsClear: false };
 
-    const session = this._sessionCheck(pair.session_type);
+    const session = this._sessionCheck(pair?.session_type || 'FOREX');
     if (!session.active) return { pass: false, reason: `Session closed (${session.reason})`, newsClear: true };
 
     const newsCheck = await this.news.checkBlackout(symbol);
@@ -223,12 +225,10 @@ class Brain1 {
     const utcMins = now.getUTCHours() * 60 + now.getUTCMinutes();
     // H4 candles close at: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
     const minIntoH4Period = utcMins % 240; // 0-239 minutes into current 4h period
-    // If we're within first 15 minutes of new H4 candle = previous candle just closed
-    // If we're 30+ mins into candle = candle still forming, setup may not hold
-    // Allow signal if we're in first 30 mins of new H4 period (candle just confirmed)
-    // OR if we're in last 15 mins of current period (candle about to confirm)
-    const freshCandle  = minIntoH4Period <= 30;
-    const nearClose    = minIntoH4Period >= 225;
+    // Allow signal if we're in first 90 mins of new H4 period (candle just confirmed)
+    // OR if we're in last 30 mins of current period (candle about to confirm)
+    const freshCandle  = minIntoH4Period <= 90;
+    const nearClose    = minIntoH4Period >= 210;
     return freshCandle || nearClose;
   }
 
