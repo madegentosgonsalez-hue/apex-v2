@@ -70,17 +70,178 @@ header {
 .header-status { display: flex; align-items: center; gap: .75rem; }
 .sydney-time { color: #fff; font-size: .75rem; white-space: nowrap; }
 
-/* ── ACTIVITY BAR ── */
-.status-bar {
-  display: flex; align-items: center; gap: 1rem;
-  padding: .55rem 1.5rem;
-  background: #1a1a1a;
-  border-bottom: 1px solid var(--border);
-  font-size: .78rem; color: #fff;
+/* ── ACTIVITY PANEL ── */
+.activity-panel {
+  background: #111;
+  border-bottom: 2px solid var(--border);
+  padding: .75rem 1.5rem .6rem;
 }
-.status-bar-label { color: #fff; text-transform: uppercase; letter-spacing: 1px; font-size: .65rem; }
-#active-pairs-bar { color: #fff; font-weight: bold; flex: 1; letter-spacing: .5px; }
-.status-bar-right { margin-left: auto; color: #fff; white-space: nowrap; font-size: .7rem; }
+
+/* Brain row */
+.brain-row {
+  display: flex;
+  gap: .75rem;
+  margin-bottom: .65rem;
+  flex-wrap: wrap;
+}
+
+.brain-card {
+  flex: 1;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  background: #191919;
+  border: 1px solid #333;
+  padding: .55rem .8rem;
+  border-radius: 2px;
+  transition: border-color .3s, background .3s;
+}
+.brain-card.active {
+  border-color: var(--primary);
+  background: rgba(0,212,170,.07);
+}
+.brain-card.bc-clock {
+  flex: 0 0 auto;
+  min-width: 120px;
+  justify-content: center;
+  border-color: #333;
+}
+
+/* Brain indicator dot */
+.bc-indicator {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: #444;
+  flex-shrink: 0;
+  transition: background .3s;
+}
+.brain-card.active .bc-indicator {
+  background: var(--primary);
+  box-shadow: 0 0 8px var(--primary);
+  animation: pulse-ring 1.5s ease-out infinite;
+}
+
+.bc-body {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+  flex: 1;
+}
+.bc-title {
+  font-size: .72rem;
+  font-weight: bold;
+  color: #fff;
+  letter-spacing: .5px;
+}
+.bc-role {
+  font-size: .62rem;
+  color: #999;
+  font-weight: normal;
+  letter-spacing: 0;
+}
+.bc-status {
+  font-size: .7rem;
+  color: #888;
+  margin-top: .05rem;
+  min-height: 1rem;
+}
+.brain-card.active .bc-status {
+  color: var(--primary);
+  font-weight: bold;
+}
+.bc-meta {
+  font-size: .6rem;
+  color: #666;
+  white-space: nowrap;
+  align-self: flex-end;
+}
+
+/* Countdown in clock card */
+.ap-countdown {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+  line-height: 1;
+  margin: .2rem 0;
+}
+.ap-countdown.urgent { color: var(--gold); }
+
+/* Pair scan dots row */
+.pair-scan-row {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+}
+.pair-scan-label {
+  font-size: .6rem;
+  color: #777;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.pair-dots {
+  display: flex;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+.pair-dot {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .72rem;
+  font-weight: bold;
+  color: #555;
+  padding: .2rem .55rem;
+  border: 1px solid #2a2a2a;
+  border-radius: 2px;
+  background: #151515;
+  transition: all .3s;
+  white-space: nowrap;
+}
+.pair-dot::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #333;
+  flex-shrink: 0;
+  transition: all .3s;
+}
+
+/* States */
+.pair-dot.pending {
+  color: #777;
+  border-color: #2a2a2a;
+}
+.pair-dot.pending::before { background: #444; }
+
+.pair-dot.scanning {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: rgba(0,212,170,.08);
+  box-shadow: 0 0 8px rgba(0,212,170,.2);
+}
+.pair-dot.scanning::before {
+  background: var(--primary);
+  box-shadow: 0 0 5px var(--primary);
+  animation: pulse-ring 1s ease-out infinite;
+}
+
+.pair-dot.done {
+  color: #fff;
+  border-color: #444;
+}
+.pair-dot.done::before { background: var(--green); }
+
+.pair-dot.error {
+  color: var(--red);
+  border-color: var(--red);
+}
+.pair-dot.error::before { background: var(--red); }
 
 /* ── NAV ── */
 nav {

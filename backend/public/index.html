@@ -24,13 +24,50 @@
     </div>
   </header>
 
-  <!-- activity bar -->
-  <div id="status-bar" class="status-bar">
-    <span class="pulse-dot" id="activity-pulse"></span>
-    <span id="activity-label" style="font-weight:bold;color:#fff;font-size:.8rem;min-width:160px">SYSTEM ONLINE</span>
-    <span class="status-bar-label">Pairs:</span>
-    <span id="active-pairs-bar">—</span>
-    <span class="status-bar-right" id="last-scan-bar"></span>
+  <!-- ── ACTIVITY PANEL ── -->
+  <div class="activity-panel">
+
+    <!-- Brain cards -->
+    <div class="brain-row">
+      <div class="brain-card" id="bc1">
+        <div class="bc-indicator" id="bc1-dot"></div>
+        <div class="bc-body">
+          <div class="bc-title">BRAIN 1 <span class="bc-role">Signal Scanner</span></div>
+          <div class="bc-status" id="bc1-status">IDLE</div>
+        </div>
+        <div class="bc-meta">every 15 min</div>
+      </div>
+      <div class="brain-card" id="bc2">
+        <div class="bc-indicator" id="bc2-dot"></div>
+        <div class="bc-body">
+          <div class="bc-title">BRAIN 2 <span class="bc-role">Position Monitor</span></div>
+          <div class="bc-status" id="bc2-status">IDLE</div>
+        </div>
+        <div class="bc-meta">every 5 min</div>
+      </div>
+      <div class="brain-card" id="bc3">
+        <div class="bc-indicator" id="bc3-dot"></div>
+        <div class="bc-body">
+          <div class="bc-title">BRAIN 3 <span class="bc-role">Exit Manager</span></div>
+          <div class="bc-status" id="bc3-status">IDLE</div>
+        </div>
+        <div class="bc-meta">every 1 min</div>
+      </div>
+      <div class="brain-card bc-clock">
+        <div class="bc-body" style="align-items:center">
+          <div class="bc-role" style="font-size:.65rem">NEXT SCAN</div>
+          <div id="ap-countdown" class="ap-countdown">--:--</div>
+          <div class="bc-role" style="font-size:.6rem" id="ap-last-scan"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pair scan dots -->
+    <div class="pair-scan-row">
+      <span class="pair-scan-label">SCANNING PAIRS</span>
+      <div class="pair-dots" id="pair-dots"></div>
+    </div>
+
   </div>
 
   <nav>

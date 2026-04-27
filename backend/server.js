@@ -40,8 +40,18 @@ const learning   = new LearningEngine({ db });
 // Active pairs list (can be toggled from settings)
 let activePairs = ['EURUSD', 'XAUUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD'];
 
-// Current scan state — read by /api/status
-let scanState = { scanning: false, brain: null, currentPair: null, lastScanAt: null };
+// Current scan state — read by /api/scan/state and /api/status
+let scanState = {
+  scanning:       false,
+  brain:          null,       // 'Brain1' | 'Brain2' | 'Brain3' | null
+  currentPair:    null,
+  lastScanAt:     null,
+  completedPairs: [],
+  errorPairs:     [],
+  totalPairs:     0,
+  brain2Active:   false,
+  brain3Active:   false,
+};
 
 // Runtime settings
 let settings = {
@@ -81,34 +91,48 @@ async function startup() {
 
 // Every 15 min: scan all pairs
 cron.schedule('*/15 * * * *', async () => {
-  scanState = { scanning: true, brain: 'Brain1', currentPair: null, lastScanAt: new Date().toISOString() };
+  scanState.scanning       = true;
+  scanState.brain          = 'Brain1';
+  scanState.lastScanAt     = new Date().toISOString();
+  scanState.completedPairs = [];
+  scanState.errorPairs     = [];
+  scanState.totalPairs     = activePairs.length;
+  scanState.currentPair    = null;
+
   for (const pair of activePairs) {
     scanState.currentPair = pair;
     try {
       const signal = await brain1.scan(pair);
+      scanState.completedPairs.push(pair);
       if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
         sysLog('signal', `Signal: ${signal.confidence_tier} ${signal.direction} on ${pair}`, pair, signal.confidence_tier);
         await handleSignal(signal, pair);
       }
     } catch (err) {
+      scanState.errorPairs.push(pair);
+      scanState.completedPairs.push(pair);
       sysLog('error', `Brain1 scan error on ${pair}: ${err.message}`, pair);
     }
   }
-  scanState.scanning = false; scanState.brain = null; scanState.currentPair = null;
+  scanState.scanning    = false;
+  scanState.brain       = null;
+  scanState.currentPair = null;
 });
 
 // Every 5 min: monitor open positions
 cron.schedule('*/5 * * * *', async () => {
-  if (!scanState.scanning) scanState.brain = 'Brain2';
+  scanState.brain2Active = true;
   try { await brain2.monitorAll(); } catch (err) {
     sysLog('error', `Brain2 monitor error: ${err.message}`);
   }
-  if (scanState.brain === 'Brain2') scanState.brain = null;
+  scanState.brain2Active = false;
 });
 
 // Every minute: check TP1/TP2/SL exits
 cron.schedule('* * * * *', async () => {
+  scanState.brain3Active = true;
   try { await brain3.checkExits(); } catch {}
+  scanState.brain3Active = false;
 });
 
 // Daily 00:00 Sydney (14:00 UTC winter / 13:00 UTC summer): reset daily loss counter
@@ -263,23 +287,49 @@ app.get('/api/trades/open', async (req, res) => {
 
 // POST /api/scan/manual
 app.post('/api/scan/manual', async (req, res) => {
-  scanState = { scanning: true, brain: 'Brain1 (manual)', currentPair: null, lastScanAt: new Date().toISOString() };
+  scanState.scanning       = true;
+  scanState.brain          = 'Brain1';
+  scanState.lastScanAt     = new Date().toISOString();
+  scanState.completedPairs = [];
+  scanState.errorPairs     = [];
+  scanState.totalPairs     = activePairs.length;
   const results = [];
   for (const pair of activePairs) {
     scanState.currentPair = pair;
     try {
       const signal = await brain1.scan(pair);
+      scanState.completedPairs.push(pair);
       results.push({ pair, signal: signal?.confidence_tier || 'NONE' });
       if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
         sysLog('signal', `Manual scan signal: ${signal.confidence_tier} on ${pair}`, pair);
         await handleSignal(signal, pair);
       }
     } catch (err) {
+      scanState.errorPairs.push(pair);
+      scanState.completedPairs.push(pair);
       results.push({ pair, error: err.message });
     }
   }
-  scanState.scanning = false; scanState.brain = null; scanState.currentPair = null;
+  scanState.scanning    = false;
+  scanState.brain       = null;
+  scanState.currentPair = null;
   res.json({ scanned: activePairs, signals: results.filter(r => r.signal && r.signal !== 'NONE').length, results });
+});
+
+// GET /api/scan/state  — lightweight, polled every 4s by activity panel
+app.get('/api/scan/state', (req, res) => {
+  res.json({
+    scanning:       scanState.scanning,
+    brain:          scanState.brain,
+    brain2Active:   scanState.brain2Active,
+    brain3Active:   scanState.brain3Active,
+    currentPair:    scanState.currentPair,
+    completedPairs: scanState.completedPairs,
+    errorPairs:     scanState.errorPairs,
+    totalPairs:     scanState.totalPairs,
+    lastScanAt:     scanState.lastScanAt,
+    activePairs:    activePairs,
+  });
 });
 
 // GET /api/signals/active

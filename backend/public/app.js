@@ -66,24 +66,96 @@ function flash(id) {
   setTimeout(() => el.classList.remove('flash'), 600);
 }
 
-// ── COUNTDOWN TIMER ───────────────────────────────────────────────────────────
+// ── COUNTDOWN ─────────────────────────────────────────────────────────────────
 function getSecondsToNextScan() {
   const now  = new Date();
-  const mins = now.getMinutes();
-  const secs = now.getSeconds();
-  // cron fires at :00, :15, :30, :45
-  const minsIntoInterval = mins % 15;
-  return (15 - minsIntoInterval) * 60 - secs;
+  const minsIntoInterval = now.getMinutes() % 15;
+  return (15 - minsIntoInterval) * 60 - now.getSeconds();
+}
+
+function fmtCountdown(secs) {
+  return `${String(Math.floor(secs / 60)).padStart(2,'0')}:${String(secs % 60).padStart(2,'0')}`;
 }
 
 function updateCountdown() {
-  const secs  = getSecondsToNextScan();
-  const m     = String(Math.floor(secs / 60)).padStart(2, '0');
-  const s     = String(secs % 60).padStart(2, '0');
-  const el    = $('countdown');
-  if (!el) return;
-  el.textContent = `${m}:${s}`;
-  el.className   = 'countdown' + (secs < 60 ? ' urgent' : '');
+  const secs = getSecondsToNextScan();
+  const str  = fmtCountdown(secs);
+  const cls  = secs < 60 ? ' urgent' : '';
+
+  // Header countdown
+  const hdr = $('countdown');
+  if (hdr) { hdr.textContent = str; hdr.className = 'countdown' + cls; }
+
+  // Activity panel countdown
+  const ap = $('ap-countdown');
+  if (ap)  { ap.textContent  = str; ap.className  = 'ap-countdown' + cls; }
+}
+
+// ── ACTIVITY PANEL — BRAIN CARDS + PAIR DOTS ─────────────────────────────────
+function setBrainCard(id, active, statusText) {
+  const card = $(id);
+  if (!card) return;
+  card.className = 'brain-card' + (active ? ' active' : '');
+  const st = card.querySelector('.bc-status');
+  if (st) st.textContent = statusText;
+}
+
+function renderPairDots(activePairs, currentPair, completedPairs, errorPairs, scanning) {
+  const container = $('pair-dots');
+  if (!container) return;
+  if (!activePairs || !activePairs.length) {
+    container.innerHTML = '<span style="color:#555;font-size:.7rem">—</span>';
+    return;
+  }
+  container.innerHTML = activePairs.map(pair => {
+    let cls = 'pair-dot pending';
+    if (!scanning && (!completedPairs || !completedPairs.length)) cls = 'pair-dot pending';
+    else if (pair === currentPair) cls = 'pair-dot scanning';
+    else if (errorPairs && errorPairs.includes(pair)) cls = 'pair-dot error';
+    else if (completedPairs && completedPairs.includes(pair)) cls = 'pair-dot done';
+    return `<div class="${cls}">${pair}</div>`;
+  }).join('');
+}
+
+let scanStateCache = {};
+
+async function pollScanState() {
+  try {
+    const s = await apiFetch('/api/scan/state');
+    scanStateCache = s;
+
+    // Brain 1
+    setBrainCard('bc1',
+      s.scanning,
+      s.scanning ? `SCANNING → ${s.currentPair || '...'}` : 'IDLE'
+    );
+
+    // Brain 2
+    setBrainCard('bc2',
+      s.brain2Active,
+      s.brain2Active ? 'MONITORING POSITIONS' : 'IDLE'
+    );
+
+    // Brain 3
+    setBrainCard('bc3',
+      s.brain3Active,
+      s.brain3Active ? 'CHECKING EXITS' : 'IDLE'
+    );
+
+    // Last scan time
+    const lastEl = $('ap-last-scan');
+    if (lastEl && s.lastScanAt) {
+      const d = new Date(s.lastScanAt);
+      lastEl.textContent = 'last ' + d.toLocaleTimeString('en-AU', { timeZone: 'Australia/Sydney', hour12: false });
+    }
+
+    // Pair dots
+    renderPairDots(s.activePairs, s.currentPair, s.completedPairs, s.errorPairs, s.scanning);
+
+    // Sync activePairs for other UI
+    if (s.activePairs) state.activePairs = s.activePairs;
+
+  } catch {}
 }
 
 // ── TABS ─────────────────────────────────────────────────────────────────────
@@ -187,42 +259,10 @@ async function pollStatus() {
     const brainEl = $('brain-label');
     const pulseEl = $('pulse-dot');
     if (brainEl) {
-      if (s.scanning && s.activeBrain) {
-        brainEl.textContent = s.activeBrain + (s.currentPair ? ` → ${s.currentPair}` : '');
-        brainEl.className   = 'brain-label';
-      } else {
-        brainEl.textContent = 'ONLINE';
-        brainEl.className   = 'brain-label';
-      }
+      brainEl.textContent = s.scanning ? `BRAIN1 → ${s.currentPair || '...'}` : 'ONLINE';
+      brainEl.className   = 'brain-label';
     }
     if (pulseEl) pulseEl.className = 'pulse-dot';
-
-    // Activity bar label (below nav — more visible)
-    const actEl    = $('activity-label');
-    const actPulse = $('activity-pulse');
-    if (actEl) {
-      if (s.scanning && s.activeBrain) {
-        actEl.textContent    = `${s.activeBrain.toUpperCase()} — SCANNING ${s.currentPair || ''}`;
-        actEl.style.color    = '#00d4aa';
-        if (actPulse) actPulse.className = 'pulse-dot';
-      } else {
-        actEl.textContent    = 'SYSTEM ONLINE — WAITING FOR NEXT SCAN';
-        actEl.style.color    = '#ffffff';
-        if (actPulse) actPulse.className = 'pulse-dot';
-      }
-    }
-
-    // Status bar — active pairs
-    const pairsBarEl = $('active-pairs-bar');
-    if (pairsBarEl && s.activePairs) {
-      pairsBarEl.textContent = s.activePairs.join(' · ');
-      state.activePairs = s.activePairs;
-    }
-    const lastScanEl = $('last-scan-bar');
-    if (lastScanEl && s.lastScanAt) {
-      const d = new Date(s.lastScanAt);
-      lastScanEl.textContent = `Last scan: ${d.toLocaleTimeString('en-AU', { timeZone: 'Australia/Sydney', hour12: false })}`;
-    }
 
     // Dashboard stats
     const prevBal = $('s-balance')?.textContent;
@@ -260,14 +300,13 @@ async function pollStatus() {
     setDot('tg-status-dot', s.telegramConnected);
     if ($('tg-status-text')) $('tg-status-text').textContent = s.telegramConnected ? 'Connected' : 'Disconnected';
   } catch (err) {
-    const pulseEl  = $('pulse-dot');
-    const actPulse = $('activity-pulse');
-    const brainEl  = $('brain-label');
-    const actEl    = $('activity-label');
-    if (pulseEl)  pulseEl.className  = 'pulse-dot offline';
-    if (actPulse) actPulse.className = 'pulse-dot offline';
-    if (brainEl)  { brainEl.textContent = 'OFFLINE'; brainEl.className = 'brain-label idle'; }
-    if (actEl)    { actEl.textContent = 'SYSTEM OFFLINE — CHECK RAILWAY LOGS'; actEl.style.color = '#ff5555'; }
+    const pulseEl = $('pulse-dot');
+    const brainEl = $('brain-label');
+    if (pulseEl) pulseEl.className = 'pulse-dot offline';
+    if (brainEl) { brainEl.textContent = 'OFFLINE'; brainEl.className = 'brain-label idle'; }
+    setBrainCard('bc1', false, 'OFFLINE');
+    setBrainCard('bc2', false, 'OFFLINE');
+    setBrainCard('bc3', false, 'OFFLINE');
   }
 }
 
@@ -669,7 +708,11 @@ async function init() {
   updateCountdown();
   setInterval(updateCountdown, 1000);
 
-  // Poll status every 20 seconds
+  // Scan state poll every 4 seconds (lightweight endpoint)
+  await pollScanState();
+  setInterval(pollScanState, 4000);
+
+  // Full status poll every 20 seconds
   setInterval(async () => {
     await pollStatus();
     if (document.querySelector('.tab-btn[data-tab="dashboard"].active')) {
