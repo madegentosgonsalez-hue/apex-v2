@@ -15,6 +15,7 @@ const Brain1            = require('./engines/brain1-signal');
 const { Brain2, Brain3 }= require('./engines/brain23');
 const AiAnalyst         = require('./engines/aiAnalyst');
 const LearningEngine    = require('./engines/learningEngine');
+const Backtester        = require('./backtest');
 const { PAIRS }         = require('./utils/constants');
 
 const app  = express();
@@ -67,6 +68,9 @@ let settings = {
   silverConviction:   65,
 };
 
+// Backtest async job map
+const backtestJobs = new Map(); // jobId → { status, progress, progressMsg, report, error, symbol, startedAt }
+
 // System log buffer (last 50 events)
 const sysLogs = [];
 function sysLog(type, message, symbol = null, status = null) {
@@ -103,10 +107,63 @@ async function startup() {
     ).catch(() => {});
   }
 
+  // backtest_results table
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS backtest_results (
+      id SERIAL PRIMARY KEY,
+      symbol VARCHAR(20),
+      years_back INTEGER DEFAULT 1,
+      total_trades INTEGER,
+      win_rate DECIMAL(5,2),
+      total_r DECIMAL(10,2),
+      avg_r DECIMAL(10,4),
+      largest_win DECIMAL(10,4),
+      largest_loss DECIMAL(10,4),
+      max_consecutive_losses INTEGER,
+      full_report_json JSONB,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  // trades_archived table
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS trades_archived (
+      id SERIAL PRIMARY KEY,
+      session_label VARCHAR(100),
+      session_start TIMESTAMP,
+      session_end TIMESTAMP,
+      total_trades INTEGER,
+      win_rate DECIMAL(5,2),
+      total_r DECIMAL(10,2),
+      trades_json JSONB,
+      archived_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+
   await ctrader.connect();
   await telegram.testConnection();
   sysLog('system', 'APEX V2 started');
   console.log(`[APEX V2] Running on port ${PORT}`);
+}
+
+// ── AI SIGNAL FILTER ─────────────────────────────────────────────────────────
+const TIER_RANK = { SKIP: 0, BRONZE: 1, SILVER: 2, GOLD: 3, DIAMOND: 4 };
+
+async function processSignal(signal, pair) {
+  try {
+    const aiResult = await ai.analyzeSignalFull(signal);
+    if (!aiResult) return signal;
+    if (aiResult.tier === 'SKIP') {
+      sysLog('signal', `AI SKIP on ${pair} — ${aiResult.reason}`, pair, 'SKIP');
+      return null;
+    }
+    const b1Rank = TIER_RANK[signal.confidence_tier] ?? 2;
+    const aiRank = TIER_RANK[aiResult.tier] ?? 2;
+    const finalTier = aiRank < b1Rank ? aiResult.tier : signal.confidence_tier;
+    return { ...signal, confidence_tier: finalTier, ai_conviction: aiResult.conviction, ai_reason: aiResult.reason };
+  } catch {
+    return signal; // AI unavailable — proceed with Brain1 tier unchanged
+  }
 }
 
 // ── CRON JOBS ─────────────────────────────────────────────────────────────────
@@ -128,8 +185,11 @@ cron.schedule('*/15 * * * *', async () => {
       const signal = result?.signal;
       scanState.completedPairs.push(pair);
       if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
-        sysLog('signal', `Signal: ${signal.confidence_tier} ${signal.direction} on ${pair}`, pair, signal.confidence_tier);
-        await handleSignal(signal, pair);
+        const finalSignal = await processSignal(signal, pair);
+        if (finalSignal) {
+          sysLog('signal', `Signal: ${finalSignal.confidence_tier} ${finalSignal.direction} on ${pair}${finalSignal.ai_conviction ? ` (AI: ${finalSignal.ai_conviction}%)` : ''}`, pair, finalSignal.confidence_tier);
+          await handleSignal(finalSignal, pair);
+        }
       }
     } catch (err) {
       scanState.errorPairs.push(pair);
@@ -324,10 +384,15 @@ app.post('/api/scan/manual', async (req, res) => {
       const signal = result?.signal;
       const reason = result?.reason;
       scanState.completedPairs.push(pair);
-      results.push({ pair, signal: signal?.confidence_tier || 'NONE', reason });
       if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
-        sysLog('signal', `Manual scan signal: ${signal.confidence_tier} on ${pair}`, pair);
-        await handleSignal(signal, pair);
+        const finalSignal = await processSignal(signal, pair);
+        results.push({ pair, signal: finalSignal?.confidence_tier || 'SKIP', reason });
+        if (finalSignal) {
+          sysLog('signal', `Manual scan signal: ${finalSignal.confidence_tier} on ${pair}${finalSignal.ai_conviction ? ` (AI: ${finalSignal.ai_conviction}%)` : ''}`, pair);
+          await handleSignal(finalSignal, pair);
+        }
+      } else {
+        results.push({ pair, signal: 'NONE', reason });
       }
     } catch (err) {
       scanState.errorPairs.push(pair);
@@ -544,6 +609,116 @@ app.post('/api/telegram/test', async (req, res) => {
   try {
     const ok = await telegram.testConnection();
     res.json({ success: ok, connected: telegram.connected });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/backtest — starts async backtest job
+app.post('/api/backtest', async (req, res) => {
+  const { symbol = 'EURUSD', yearsBack = 1 } = req.body || {};
+  const jobId = `bt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const job = {
+    jobId, symbol, yearsBack,
+    status: 'running', progress: 0, progressMsg: 'Starting…',
+    report: null, error: null, startedAt: new Date().toISOString(),
+  };
+  backtestJobs.set(jobId, job);
+
+  // Run async — Railway times out HTTP after ~30s so we detach
+  (async () => {
+    try {
+      const bt = new Backtester({
+        TWELVE_DATA_API_KEY: process.env.TWELVE_DATA_API_KEY,
+      });
+      const report = await bt.runBacktest(symbol, parseInt(yearsBack) || 1, (pct, msg) => {
+        job.progress    = pct;
+        job.progressMsg = msg;
+      });
+      job.status   = 'done';
+      job.progress = 100;
+      job.report   = report;
+      await db.query(
+        `INSERT INTO backtest_results
+         (symbol, years_back, total_trades, win_rate, total_r, avg_r, largest_win, largest_loss, max_consecutive_losses, full_report_json)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [symbol, yearsBack, report.summary.totalTrades, report.summary.winRate,
+         report.summary.totalR, report.summary.avgR, report.summary.largestWin,
+         report.summary.largestLoss, report.summary.maxConsecutiveLosses, JSON.stringify(report)]
+      ).catch(() => {});
+      sysLog('system', `Backtest ${symbol}: ${report.summary.totalTrades} trades, ${report.summary.winRate}% WR, ${report.summary.totalR}R`);
+    } catch (err) {
+      job.status = 'error';
+      job.error  = err.message;
+      sysLog('error', `Backtest failed ${symbol}: ${err.message}`);
+    }
+  })();
+
+  res.json({ jobId, status: 'running' });
+});
+
+// GET /api/backtest/result/:jobId — poll job status
+app.get('/api/backtest/result/:jobId', (req, res) => {
+  const job = backtestJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
+});
+
+// GET /api/backtest/history
+app.get('/api/backtest/history', async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT id, symbol, years_back, total_trades, win_rate, total_r, avg_r, created_at
+       FROM backtest_results ORDER BY created_at DESC LIMIT 20`
+    );
+    res.json(r.rows || []);
+  } catch { res.json([]); }
+});
+
+// POST /api/reset — archive trades, clear session
+app.post('/api/reset', async (req, res) => {
+  try {
+    const statsQ = await db.query(`
+      SELECT
+        COUNT(*) as total_trades,
+        SUM(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+        COALESCE(SUM(pnl_r), 0)::numeric as total_r,
+        MIN(created_at) as session_start,
+        MAX(COALESCE(closed_at, NOW())) as session_end
+      FROM trades WHERE outcome IS NOT NULL
+    `).catch(() => ({ rows: [{}] }));
+
+    const st   = statsQ.rows[0] || {};
+    const total = parseInt(st.total_trades || 0);
+    const wins  = parseInt(st.wins  || 0);
+    const losses = parseInt(st.losses || 0);
+    const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
+    const totalR  = parseFloat(st.total_r || 0);
+
+    // Grab all trade rows for archive
+    const tradesQ = await db.query('SELECT * FROM trades').catch(() => ({ rows: [] }));
+
+    // Archive
+    await db.query(
+      `INSERT INTO trades_archived
+       (session_label, session_start, session_end, total_trades, win_rate, total_r, trades_json, archived_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+      [
+        `Session ${new Date().toISOString().slice(0, 10)}`,
+        st.session_start || new Date().toISOString(),
+        st.session_end   || new Date().toISOString(),
+        total, winRate, totalR,
+        JSON.stringify(tradesQ.rows),
+      ]
+    ).catch(() => {});
+
+    // Delete closed trades and non-active signals
+    await db.query(`DELETE FROM trades WHERE outcome IS NOT NULL`).catch(() => {});
+    await db.query(`DELETE FROM signals WHERE status != 'ACTIVE'`).catch(() => {});
+
+    sysLog('system', `RESET — archived ${total} trades (${winRate}% WR, ${totalR}R)`);
+    res.json({ success: true, archived: { trades: total, wins, losses, winRate, totalR } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

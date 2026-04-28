@@ -83,6 +83,7 @@
     <button class="tab-btn" data-tab="subscribers">Subscribers</button>
     <button class="tab-btn" data-tab="logs">Logs</button>
     <button class="tab-btn" data-tab="broker">MT4/MT5</button>
+    <button class="tab-btn" data-tab="backtest">Backtest</button>
   </nav>
 
   <main>
@@ -132,6 +133,11 @@
           <span>Mode:</span>
           <span id="d-mode" class="badge off">PAPER</span>
         </div>
+      </div>
+
+      <div class="reset-row">
+        <button id="btn-reset" class="btn-danger">Reset Session</button>
+        <span class="reset-hint">Archives trades · keeps learning data</span>
       </div>
 
       <!-- mini chart on dashboard -->
@@ -375,7 +381,75 @@
         </div>
       </div>
     </section>
+    <!-- BACKTEST -->
+    <section id="tab-backtest" class="tab">
+      <div class="bt-header">
+        <h3>Strategy Backtest <span class="bt-sub">1 year · 1H data · 40/40/20 exit</span></h3>
+      </div>
+
+      <div class="bt-pair-grid">
+        <button class="bt-pair-btn" data-symbol="EURUSD">EURUSD</button>
+        <button class="bt-pair-btn" data-symbol="XAUUSD">XAUUSD</button>
+        <button class="bt-pair-btn" data-symbol="GBPUSD">GBPUSD</button>
+        <button class="bt-pair-btn" data-symbol="USDJPY">USDJPY</button>
+        <button class="bt-pair-btn" data-symbol="AUDUSD">AUDUSD</button>
+        <button class="bt-pair-btn" data-symbol="USDCAD">USDCAD</button>
+      </div>
+
+      <div id="bt-loading" class="bt-loading hidden">
+        <div class="spinner"></div>
+        <div id="bt-progress-msg" class="bt-progress-msg">Starting backtest…</div>
+        <div class="bt-progress-bar-wrap"><div id="bt-progress-bar" class="bt-progress-bar"></div></div>
+        <div id="bt-progress-pct" class="bt-progress-pct">0%</div>
+      </div>
+
+      <div id="bt-report" class="bt-report hidden">
+        <div class="bt-report-header">
+          <span id="bt-report-title" class="bt-report-title"></span>
+          <button id="btn-bt-csv" class="btn-secondary">Download CSV</button>
+        </div>
+
+        <div class="bt-stat-grid" id="bt-summary-grid"></div>
+
+        <div class="bt-sections">
+          <div class="bt-section">
+            <h4>By Entry Type</h4>
+            <div id="bt-by-entry"></div>
+          </div>
+          <div class="bt-section">
+            <h4>By Tier</h4>
+            <div id="bt-by-tier"></div>
+          </div>
+          <div class="bt-section">
+            <h4>By Session</h4>
+            <div id="bt-by-session"></div>
+          </div>
+        </div>
+
+        <h4 style="margin:1.25rem 0 .5rem">Recent Backtest Trades</h4>
+        <table id="bt-trades-table">
+          <thead><tr><th>Date</th><th>Dir</th><th>Entry Type</th><th>Tier</th><th>Outcome</th><th>R</th><th>Exit</th></tr></thead>
+          <tbody id="bt-trades-body"></tbody>
+        </table>
+      </div>
+
+      <h4 style="margin-top:1.5rem;margin-bottom:.5rem;color:var(--muted);font-size:.65rem;letter-spacing:1.5px;text-transform:uppercase">Previous Backtests</h4>
+      <div id="bt-history" class="bt-history"></div>
+    </section>
   </main>
+
+  <!-- RESET MODAL -->
+  <div id="reset-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-title">Reset Session?</div>
+      <div id="reset-modal-stats" class="modal-stats"></div>
+      <p class="modal-warn">This archives all closed trades. Learning data, system logs and backtest results are <strong>kept</strong>. Active open positions are not affected.</p>
+      <div class="modal-actions">
+        <button id="btn-reset-confirm" class="btn-danger">Yes, Reset</button>
+        <button id="btn-reset-cancel" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

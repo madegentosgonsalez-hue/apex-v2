@@ -147,6 +147,139 @@ class AIAnalyst {
     return resp;
   }
 
+  // ── FULL SIGNAL ANALYSIS (Thing 1 — rich Claude prompt) ─────────────────
+  // Called by server.js after Brain1 generates a signal.
+  // Fetches past performance + learning insights, sends rich context to Claude.
+  // Returns { conviction, tier, reason } — tier can only lower Brain1's tier.
+  async analyzeSignalFull(signal) {
+    if (this.mockMode) {
+      return { conviction: 76, tier: signal.confidence_tier, reason: 'Mock mode — set ANTHROPIC_API_KEY for real AI analysis.' };
+    }
+
+    try {
+      // 1. Fetch past 30-day performance for this pair + entry type
+      const perfRow = await this.db.query(`
+        SELECT
+          COUNT(*) as total,
+          SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
+          AVG(CASE WHEN pnl_r IS NOT NULL THEN pnl_r ELSE 0 END) as avg_r
+        FROM trades
+        WHERE symbol = $1
+          AND entry_type = $2
+          AND closed_at >= NOW() - INTERVAL '30 days'
+          AND outcome IS NOT NULL
+      `, [signal.symbol, signal.entry_type]).catch(() => ({ rows: [{}] }));
+      const perf = perfRow.rows[0] || {};
+
+      // 2. Last 5 similar setups
+      const similarRows = await this.db.query(`
+        SELECT outcome, pnl_r, closed_at FROM trades
+        WHERE symbol = $1 AND entry_type = $2
+          AND outcome IS NOT NULL
+        ORDER BY closed_at DESC LIMIT 5
+      `, [signal.symbol, signal.entry_type]).catch(() => ({ rows: [] }));
+
+      // 3. Current streak
+      const streakRows = await this.db.query(`
+        SELECT outcome FROM trades
+        WHERE outcome IS NOT NULL
+        ORDER BY closed_at DESC LIMIT 10
+      `).catch(() => ({ rows: [] }));
+      let streak = 0, streakType = '';
+      for (const r of streakRows.rows) {
+        if (!streakType) streakType = r.outcome;
+        if (r.outcome === streakType) streak++;
+        else break;
+      }
+
+      // 4. Daily losses today
+      const lossRow = await this.db.query(`
+        SELECT COUNT(*) as count FROM trades
+        WHERE outcome='LOSS' AND DATE(closed_at) = CURRENT_DATE
+      `).catch(() => ({ rows: [{ count: 0 }] }));
+
+      // 5. Latest learning pattern insight
+      const learnRow = await this.db.query(`
+        SELECT insights, best_pair, best_entry_type, best_session, suggested_changes
+        FROM learning_patterns ORDER BY created_at DESC LIMIT 1
+      `).catch(() => ({ rows: [{}] }));
+      const learn = learnRow.rows[0] || {};
+
+      const dailyLosses = parseInt(lossRow.rows[0]?.count || 0);
+      const winRate30d  = perf.total > 0 ? Math.round((perf.wins / perf.total) * 100) : null;
+      const last5       = similarRows.rows.map(r => r.outcome);
+
+      // Build rich user prompt
+      const userPrompt = `SIGNAL:
+Pair: ${signal.symbol} | Direction: ${signal.direction} | Entry Type: ${signal.entry_type}
+Entry: ${signal.entry_price} | SL: ${signal.stop_loss} | TP1: ${signal.tp1} | TP2: ${signal.tp2}
+Confluence: ${signal.confluence_score}/9 | Session: ${signal.session} | Regime: ${signal.regime}
+HTF Aligned: ${signal.htf_trend_aligned} | R:R: ${signal.rr_ratio}
+
+PAST PERFORMANCE (30 days, same pair+type):
+Win rate: ${winRate30d !== null ? winRate30d + '%' : 'No data'} (${perf.total || 0} trades)
+Avg R: ${perf.avg_r ? parseFloat(perf.avg_r).toFixed(2) : 'N/A'}
+Last 5 similar: ${last5.length ? last5.join(', ') : 'No data'}
+Current streak: ${streak ? streak + 'x ' + streakType : 'None'}
+Daily losses today: ${dailyLosses}/4
+
+LEARNING INSIGHTS:
+Best pair: ${learn.best_pair || 'Unknown'} | Best type: ${learn.best_entry_type || 'Unknown'} | Best session: ${learn.best_session || 'Unknown'}
+Insights: ${learn.insights ? JSON.stringify(learn.insights).slice(0, 200) : 'None yet'}
+
+MARKET CONTEXT:
+DXY: ${signal.dxy_direction || 'UNKNOWN'} | VIX: ${signal.vix_level || 'N/A'}
+News clear: ${signal.news_clear} | Key level: ${signal.level_type || 'N/A'}`;
+
+      const systemPrompt = `You are an expert institutional forex trader. Analyze signals using past performance data and learning insights. Return ONLY JSON. No explanation. No markdown. Format: {"conviction":0-100,"tier":"DIAMOND/GOLD/SILVER/SKIP","reason":"one sentence"}`;
+
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type':      'application/json',
+          'x-api-key':         this.apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model:      MODEL,
+          max_tokens: 150,
+          system:     systemPrompt,
+          messages:   [{ role: 'user', content: userPrompt }],
+        }),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const text = this._text(json);
+      const parsed = JSON.parse(this._cleanJSON(text));
+
+      const conviction = Math.max(0, Math.min(100, parseInt(parsed.conviction) || 0));
+      let tier = parsed.tier || 'SKIP';
+      if (!['DIAMOND','GOLD','SILVER','SKIP'].includes(tier)) tier = 'SKIP';
+
+      // Apply conviction thresholds from PDF
+      if (conviction < 65)       tier = 'SKIP';
+      else if (conviction < 75)  tier = 'SILVER';
+      else if (conviction < 88)  tier = 'GOLD';
+      else                       tier = 'DIAMOND';
+
+      const reason = (parsed.reason || '').slice(0, 200);
+      console.log(`[AI Full] ${signal.symbol}: ${tier} (${conviction}) — ${reason}`);
+
+      // Log to DB
+      await this.db.query(
+        `INSERT INTO system_logs (log_type, message, symbol, status) VALUES ($1,$2,$3,$4)`,
+        ['ai_signal', `AI: ${tier} (${conviction}) — ${reason}`, signal.symbol, tier]
+      ).catch(() => {});
+
+      return { conviction, tier, reason };
+
+    } catch (err) {
+      console.error('[AI Full] Error:', err.message);
+      return { conviction: 75, tier: signal.confidence_tier, reason: 'AI unavailable — using Brain1 tier.' };
+    }
+  }
+
   // ── WEEKLY LEARNING REVIEW ────────────────────────────────────────────────
   async weeklyReview(perfData) {
     if (this.mockMode) return { insights: ['Mock mode — no real AI analysis'], status: 'mock' };

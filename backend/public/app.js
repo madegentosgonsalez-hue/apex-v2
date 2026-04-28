@@ -173,6 +173,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (tab === 'logs')        loadLogs();
     if (tab === 'analyzer')    loadAnalyzer();
     if (tab === 'broker')      loadBroker();
+    if (tab === 'backtest')    loadBacktestHistory();
   });
 });
 
@@ -678,6 +679,212 @@ $('btn-ct-reconnect')?.addEventListener('click', async () => {
     $('ct-status-text').textContent = r.connected ? 'Connected' : 'Disconnected';
   } catch {}
   btn.textContent = 'Reconnect';
+  btn.disabled    = false;
+});
+
+// ── BACKTEST ──────────────────────────────────────────────────────────────────
+let btPollTimer = null;
+let btCurrentReport = null;
+
+document.querySelectorAll('.bt-pair-btn').forEach(btn => {
+  btn.addEventListener('click', () => runBacktest(btn.dataset.symbol));
+});
+
+async function runBacktest(symbol) {
+  // Reset UI
+  $('bt-loading').classList.remove('hidden');
+  $('bt-report').classList.add('hidden');
+  $('bt-progress-msg').textContent = 'Requesting backtest…';
+  $('bt-progress-bar').style.width = '0%';
+  $('bt-progress-pct').textContent = '0%';
+  document.querySelectorAll('.bt-pair-btn').forEach(b => { b.disabled = true; b.classList.remove('running'); });
+  const activeBtn = document.querySelector(`.bt-pair-btn[data-symbol="${symbol}"]`);
+  if (activeBtn) activeBtn.classList.add('running');
+
+  try {
+    const r = await apiFetch('/api/backtest', { method: 'POST', body: JSON.stringify({ symbol, yearsBack: 1 }) });
+    if (r.error || !r.jobId) {
+      $('bt-progress-msg').textContent = 'Failed to start: ' + (r.error || 'unknown error');
+      document.querySelectorAll('.bt-pair-btn').forEach(b => { b.disabled = false; b.classList.remove('running'); });
+      return;
+    }
+    pollBacktest(r.jobId, symbol);
+  } catch (err) {
+    $('bt-progress-msg').textContent = 'Network error: ' + err.message;
+    document.querySelectorAll('.bt-pair-btn').forEach(b => { b.disabled = false; b.classList.remove('running'); });
+  }
+}
+
+function pollBacktest(jobId, symbol) {
+  if (btPollTimer) clearInterval(btPollTimer);
+  btPollTimer = setInterval(async () => {
+    try {
+      const job = await apiFetch(`/api/backtest/result/${jobId}`);
+      const pct = Math.round(job.progress || 0);
+      $('bt-progress-bar').style.width = pct + '%';
+      $('bt-progress-pct').textContent = pct + '%';
+      $('bt-progress-msg').textContent = job.progressMsg || 'Running…';
+
+      if (job.status === 'done') {
+        clearInterval(btPollTimer);
+        $('bt-loading').classList.add('hidden');
+        document.querySelectorAll('.bt-pair-btn').forEach(b => { b.disabled = false; b.classList.remove('running'); });
+        btCurrentReport = job.report;
+        renderBacktestReport(job.report, symbol);
+        loadBacktestHistory();
+      } else if (job.status === 'error') {
+        clearInterval(btPollTimer);
+        $('bt-loading').classList.add('hidden');
+        $('bt-progress-msg').textContent = 'Error: ' + (job.error || 'unknown');
+        document.querySelectorAll('.bt-pair-btn').forEach(b => { b.disabled = false; b.classList.remove('running'); });
+      }
+    } catch {}
+  }, 3000);
+}
+
+function renderBacktestReport(report, symbol) {
+  const s = report.summary || {};
+  $('bt-report-title').textContent = `${symbol} — 1 Year Backtest`;
+
+  // Summary grid
+  const wr   = s.winRate ?? 0;
+  const tr   = s.totalR  ?? 0;
+  const avgR = s.avgR ?? 0;
+  $('bt-summary-grid').innerHTML = [
+    ['Total Trades',  s.totalTrades ?? 0, ''],
+    ['Win Rate',      wr + '%', wr >= 50 ? 'pos' : 'neg'],
+    ['Total R',       (tr >= 0 ? '+' : '') + fmt(tr, 2) + 'R', tr >= 0 ? 'pos' : 'neg'],
+    ['Avg R/trade',   (avgR >= 0 ? '+' : '') + fmt(avgR, 2) + 'R', avgR >= 0 ? 'pos' : 'neg'],
+    ['Largest Win',   '+' + fmt(s.largestWin, 2) + 'R', 'pos'],
+    ['Largest Loss',  fmt(s.largestLoss, 2) + 'R', 'neg'],
+    ['Max Consec L',  s.maxConsecutiveLosses ?? 0, ''],
+    ['Profit Factor', fmt(s.profitFactor, 2), (s.profitFactor ?? 0) >= 1 ? 'pos' : 'neg'],
+  ].map(([label, val, cls]) =>
+    `<div class="bt-stat-card">
+       <div class="bt-stat-label">${label}</div>
+       <div class="bt-stat-value ${cls}">${val}</div>
+     </div>`
+  ).join('');
+
+  // By entry type
+  const byEntry = report.byEntryType || {};
+  $('bt-by-entry').innerHTML = Object.entries(byEntry).map(([k, v]) =>
+    `<div class="bt-row">
+       <span class="bt-row-label">${k}</span>
+       <span class="bt-row-val ${v.totalR >= 0 ? 'pos' : 'neg'}">${v.trades}T · ${v.winRate}% WR · ${v.totalR >= 0 ? '+' : ''}${fmt(v.totalR,1)}R</span>
+     </div>`
+  ).join('') || '<div class="bt-row"><span class="bt-row-label" style="color:#555">No data</span></div>';
+
+  // By tier
+  const byTier = report.byTier || {};
+  $('bt-by-tier').innerHTML = Object.entries(byTier).map(([k, v]) =>
+    `<div class="bt-row">
+       <span class="bt-row-label">${k}</span>
+       <span class="bt-row-val ${v.totalR >= 0 ? 'pos' : 'neg'}">${v.trades}T · ${v.winRate}% WR · ${v.totalR >= 0 ? '+' : ''}${fmt(v.totalR,1)}R</span>
+     </div>`
+  ).join('') || '<div class="bt-row"><span class="bt-row-label" style="color:#555">No data</span></div>';
+
+  // By session
+  const bySess = report.bySession || {};
+  $('bt-by-session').innerHTML = Object.entries(bySess).map(([k, v]) =>
+    `<div class="bt-row">
+       <span class="bt-row-label">${k}</span>
+       <span class="bt-row-val ${v.totalR >= 0 ? 'pos' : 'neg'}">${v.trades}T · ${v.winRate}% WR · ${v.totalR >= 0 ? '+' : ''}${fmt(v.totalR,1)}R</span>
+     </div>`
+  ).join('') || '<div class="bt-row"><span class="bt-row-label" style="color:#555">No data</span></div>';
+
+  // Recent trades table
+  const trades = (report.recentTrades || []).slice(0, 30);
+  $('bt-trades-body').innerHTML = trades.map(t => `
+    <tr>
+      <td>${t.date ? t.date.slice(0, 10) : '—'}</td>
+      <td>${t.direction || '—'}</td>
+      <td>${t.entryType || '—'}</td>
+      <td>${t.tier || '—'}</td>
+      <td class="${t.outcome === 'WIN' ? 'badge-win' : t.outcome === 'LOSS' ? 'badge-loss' : ''}">${t.outcome || '—'}</td>
+      <td>${t.pnlR != null ? (t.pnlR >= 0 ? '+' : '') + fmt(t.pnlR, 2) + 'R' : '—'}</td>
+      <td>${t.exitReason || '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="7" class="empty">No trades</td></tr>';
+
+  $('bt-report').classList.remove('hidden');
+}
+
+$('btn-bt-csv')?.addEventListener('click', () => {
+  if (!btCurrentReport) return;
+  const trades = btCurrentReport.recentTrades || [];
+  const header = ['date','direction','entryType','tier','outcome','pnlR','exitReason'];
+  const rows   = trades.map(t => header.map(k => `"${(t[k] ?? '').toString().replace(/"/g, '""')}"`).join(','));
+  const csv    = [header.join(','), ...rows].join('\n');
+  const blob   = new Blob([csv], { type: 'text/csv' });
+  const url    = URL.createObjectURL(blob);
+  const a      = document.createElement('a');
+  a.href       = url;
+  a.download   = `backtest_${btCurrentReport.symbol || 'result'}_${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+async function loadBacktestHistory() {
+  const container = $('bt-history');
+  if (!container) return;
+  try {
+    const rows = await apiFetch('/api/backtest/history');
+    if (!rows.length) {
+      container.innerHTML = '<p class="empty" style="padding:.75rem;font-size:.75rem">No backtests run yet</p>';
+      return;
+    }
+    container.innerHTML = rows.map(r => `
+      <div class="bt-hist-item">
+        <span class="bt-hist-sym">${r.symbol}</span>
+        <span class="bt-hist-stat">${r.total_trades} trades</span>
+        <span class="bt-hist-stat">${r.win_rate}% WR</span>
+        <span class="bt-hist-stat ${r.total_r >= 0 ? 'pos' : 'neg'}" style="color:${r.total_r >= 0 ? 'var(--green)' : 'var(--red)'}">${r.total_r >= 0 ? '+' : ''}${fmt(r.total_r, 1)}R</span>
+        <span class="bt-hist-date">${r.created_at ? new Date(r.created_at).toLocaleDateString('en-AU') : ''}</span>
+      </div>`).join('');
+  } catch {
+    container.innerHTML = '<p class="empty" style="padding:.75rem;font-size:.75rem">Could not load history</p>';
+  }
+}
+
+// ── RESET ─────────────────────────────────────────────────────────────────────
+$('btn-reset')?.addEventListener('click', async () => {
+  // Pre-fetch stats to show in the confirmation modal
+  try {
+    const s = await apiFetch('/api/status');
+    $('reset-modal-stats').innerHTML = `
+      <div class="modal-stat"><div class="ms-label">Win Rate 7d</div><div class="ms-val">${s.winRate7d != null ? s.winRate7d + '%' : '—'}</div></div>
+      <div class="modal-stat"><div class="ms-label">Daily Losses</div><div class="ms-val">${s.dailyLosses ?? '—'} / ${s.dailyLossLimit ?? '—'}</div></div>
+      <div class="modal-stat"><div class="ms-label">Open Positions</div><div class="ms-val">${s.openPositions ?? 0}</div></div>
+      <div class="modal-stat"><div class="ms-label">Today P&amp;L</div><div class="ms-val">${s.todayPnL != null ? (s.todayPnL >= 0 ? '+' : '') + fmtMoney(s.todayPnL) : '—'}</div></div>`;
+  } catch {
+    $('reset-modal-stats').innerHTML = '';
+  }
+  $('reset-modal').classList.remove('hidden');
+});
+
+$('btn-reset-cancel')?.addEventListener('click', () => $('reset-modal').classList.add('hidden'));
+
+$('btn-reset-confirm')?.addEventListener('click', async () => {
+  const btn = $('btn-reset-confirm');
+  btn.textContent = 'Resetting…';
+  btn.disabled    = true;
+  try {
+    const r = await apiFetch('/api/reset', { method: 'POST' });
+    $('reset-modal').classList.add('hidden');
+    if (r.success) {
+      // Update dashboard stat displays
+      if ($('s-wr'))     $('s-wr').textContent     = '—';
+      if ($('s-losses')) $('s-losses').textContent = '0 / ' + (state.settings.dailyLossLimit || '4');
+      if ($('s-open'))   $('s-open').textContent   = '—';
+      if ($('s-last-signal')) $('s-last-signal').textContent = '—';
+      await loadRecentTrades();
+      showMsg('scan-msg', `Session reset — ${r.archived?.trades || 0} trades archived`);
+    }
+  } catch (err) {
+    showMsg('scan-msg', 'Reset failed: ' + err.message, true);
+    $('reset-modal').classList.add('hidden');
+  }
+  btn.textContent = 'Yes, Reset';
   btn.disabled    = false;
 });
 

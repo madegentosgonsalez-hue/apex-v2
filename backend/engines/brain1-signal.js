@@ -306,7 +306,7 @@ class Brain1 {
     return null;
   }
 
-  // ── CONFLUENCE SCORING ── Pass h2Conflicts from already-computed bias (NEW-05 FIX)
+  // ── CONFLUENCE SCORING ── 9 factors (was 6). Minimum still 4. Tier thresholds scale.
   _confluence(mkt, dir, loc, symbol, biasH2Conflicts) {
     const h4     = mkt.h4;
     const rsi    = h4.rsi;
@@ -342,6 +342,15 @@ class Brain1 {
 
     // Factor 6: Pair-aware intermarket
     f.intermarket = this._intermarketCheck(mkt.intermarket, dir, symbol);
+
+    // Factor 7: AMD Phase — Manipulation (sweep) or Distribution (sweep + MSB) = +1
+    f.amdPhase = this._amdPhase(mkt, dir);
+
+    // Factor 8: IFVG — old opposite FVG filled and flipped near entry level = +1
+    f.ifvg = this._ifvgCheck(mkt.h4, dir, loc);
+
+    // Factor 9: OTE Zone — entry within 62-79% Fibonacci retracement = +1
+    f.oteZone = this._oteZone(mkt.h4, dir, loc);
 
     // NEW-05 FIX: Use h2Conflicts from already-computed bias (not re-computing)
     let score = Object.values(f).filter(Boolean).length;
@@ -413,12 +422,12 @@ class Brain1 {
     };
   }
 
-  // ── TIER ASSIGNMENT ───────────────────────────────────────────────────────
+  // ── TIER ASSIGNMENT ── Scales to 9 factors (was 6)
   _tier(score) {
-    if (score === 6) return CONFIDENCE_TIERS.DIAMOND;
-    if (score === 5) return CONFIDENCE_TIERS.GOLD;
-    if (score === 4) return CONFIDENCE_TIERS.SILVER;
-    if (score === 3) return CONFIDENCE_TIERS.BRONZE;
+    if (score >= 7) return CONFIDENCE_TIERS.DIAMOND; // 7-9/9
+    if (score >= 5) return CONFIDENCE_TIERS.GOLD;    // 5-6/9
+    if (score >= 4) return CONFIDENCE_TIERS.SILVER;  // 4/9
+    if (score >= 3) return CONFIDENCE_TIERS.BRONZE;  // 3/9
     return CONFIDENCE_TIERS.SKIP;
   }
 
@@ -655,6 +664,83 @@ class Brain1 {
     }
 
     return false; // Unknown pair — don't award intermarket factor
+  }
+
+  // ── AMD PHASE CHECK (Factor 7) ───────────────────────────────────────────
+  // Manipulation = liquidity sweep in active session
+  // Distribution = sweep confirmed by MSB (highest quality)
+  _amdPhase(mkt, dir) {
+    try {
+      const sweep = this._liquiditySweep(mkt.h4, dir);
+      if (!sweep) return false; // Accumulation phase — no bonus
+      // Distribution phase: sweep confirmed by MSB on H1
+      const msb = this._msb(mkt.h1, dir);
+      if (msb) return true; // Distribution = highest quality AMD signal
+      // Manipulation phase: sweep active in London/NY hours
+      const h = new Date().getUTCHours();
+      return h >= 8 && h < 21;
+    } catch { return false; }
+  }
+
+  // ── IFVG CHECK (Factor 8) ────────────────────────────────────────────────
+  // Inverse FVG: old opposite-direction FVG that got filled = now flipped
+  _ifvgCheck(tf, dir, loc) {
+    try {
+      const candles = tf?.candles?.slice(-60) || [];
+      const price   = loc?.currentPrice || tf?.closes?.[tf.closes.length - 1];
+      const atr     = tf?.atr || 0;
+      const tol     = atr * 0.8;
+      if (!price || candles.length < 10 || !atr) return false;
+
+      for (let i = 1; i < candles.length - 2; i++) {
+        const prev = candles[i - 1], next = candles[i + 1];
+
+        if (dir === 'BUY') {
+          // Old BEAR FVG (next.high < prev.low) that got filled = BULL IFVG support
+          if (next.high < prev.low) {
+            const fvgLow = next.high, fvgHigh = prev.low;
+            const filled = candles.slice(i + 2).some(c => c.high >= fvgHigh);
+            if (filled && Math.abs(price - fvgLow) <= tol) return true;
+          }
+        } else {
+          // Old BULL FVG (next.low > prev.high) that got filled = BEAR IFVG resistance
+          if (next.low > prev.high) {
+            const fvgLow = prev.high, fvgHigh = next.low;
+            const filled = candles.slice(i + 2).some(c => c.low <= fvgLow);
+            if (filled && Math.abs(price - fvgHigh) <= tol) return true;
+          }
+        }
+      }
+      return false;
+    } catch { return false; }
+  }
+
+  // ── OTE ZONE CHECK (Factor 9) ─────────────────────────────────────────────
+  // Optimal Trade Entry = 62-79% Fibonacci retracement of last significant swing
+  _oteZone(tf, dir, loc) {
+    try {
+      const price  = loc?.currentPrice || tf?.closes?.[tf.closes.length - 1];
+      const highs  = tf?.swingHighs?.slice(-5) || [];
+      const lows   = tf?.swingLows?.slice(-5)  || [];
+      if (!price || highs.length < 2 || lows.length < 2) return false;
+
+      const swingHigh = Math.max(...highs);
+      const swingLow  = Math.min(...lows);
+      const range     = swingHigh - swingLow;
+      if (range <= 0) return false;
+
+      if (dir === 'BUY') {
+        // Retracing down from high: OTE = 62-79% of range below the high
+        const oteHigh = swingHigh - range * 0.62;
+        const oteLow  = swingHigh - range * 0.79;
+        return price >= oteLow && price <= oteHigh;
+      } else {
+        // Retracing up from low: OTE = 62-79% of range above the low
+        const oteLow  = swingLow + range * 0.62;
+        const oteHigh = swingLow + range * 0.79;
+        return price >= oteLow && price <= oteHigh;
+      }
+    } catch { return false; }
   }
 
   // ── SESSION CHECK ── FIX BUG-15: all inactive paths must include reason
