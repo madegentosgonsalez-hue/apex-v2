@@ -240,8 +240,8 @@ class DataService {
       rsi:        indicators.rsi,
       atr:        indicators.atr,
       adx:        indicators.adx,
-      swingHighs: this._swingPoints(highs, 'HIGH'),
-      swingLows:  this._swingPoints(lows,  'LOW'),
+      swingHighs: this._swingPoints(highs, 'HIGH', 2),
+      swingLows:  this._swingPoints(lows,  'LOW',  2),
       poc:        null,
     };
   }

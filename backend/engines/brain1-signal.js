@@ -122,10 +122,10 @@ class Brain1 {
   // ── TOP-DOWN BIAS ─────────────────────────────────────────────────────────
   // FLAW-10 FIX: H2 bridge now participates as a confirmation gate
   _topDownBias(mkt) {
-    const weekly = this._bias(mkt.weekly, 5); // FLAW-02 FIX: Weekly needs 5 swings
-    const daily  = this._bias(mkt.daily,  4); // FLAW-02 FIX: Daily needs 4 swings
+    const weekly = this._bias(mkt.weekly, 3); // 3 confirmed swings on weekly is sufficient
+    const daily  = this._bias(mkt.daily,  3); // 3 confirmed swings on daily
     const h4     = this._bias(mkt.h4,     3);
-    const h2     = this._bias(mkt.h2,     3); // FLAW-10 FIX: H2 bridge now evaluated
+    const h2     = this._bias(mkt.h2,     3);
 
     // RULE: Weekly AND Daily must agree — that's the direction
     if (weekly === daily && weekly !== 'NEUTRAL') {
@@ -168,8 +168,9 @@ class Brain1 {
       isLHLL = lastHighs[1] < lastHighs[0] && lastLows[1] < lastLows[0];
     }
 
-    const aboveEMAs = tf.ema21 && tf.ema50 && price > tf.ema21 && price > tf.ema50 && tf.ema21 > tf.ema50;
-    const belowEMAs = tf.ema21 && tf.ema50 && price < tf.ema21 && price < tf.ema50 && tf.ema21 < tf.ema50;
+    // Price above ema50 with ema21 > ema50 = uptrend confirmed (allows pullback to ema21 zone)
+    const aboveEMAs = tf.ema21 && tf.ema50 && price > tf.ema50 && tf.ema21 > tf.ema50;
+    const belowEMAs = tf.ema21 && tf.ema50 && price < tf.ema50 && tf.ema21 < tf.ema50;
 
     // FLAW-01 FIX: Structure confirmed + EMA aligned = strong bias
     if (isHHHL && aboveEMAs) return 'BUY';
