@@ -505,6 +505,10 @@ input[type=range]::-moz-range-track { background: #444; height: 3px; border-radi
 .bt-pair-btn:hover   { border-color: var(--primary); color: var(--primary); }
 .bt-pair-btn.running { border-color: var(--gold); color: var(--gold); }
 .bt-pair-btn:disabled { opacity: .5; cursor: default; }
+.bt-session-tag {
+  width: 100%; font-size: .65rem; color: var(--muted); letter-spacing: 1.5px;
+  text-transform: uppercase; padding: .15rem 0 0; margin-top: .35rem;
+}
 
 /* Spinner */
 @keyframes spin { to { transform: rotate(360deg); } }

@@ -182,13 +182,23 @@ class Backtester {
       };
       if (!mkt.h4 || !mkt.daily || !mkt.weekly) return skip('regime');
 
-      // Session filter first — cheapest check
+      // Session + pair filter — each pair only trades in its designated session(s)
       const utcH = ts.getUTCHours();
-      let session = 'ASIAN';
-      if (utcH >= 13 && utcH < 16)      session = 'LONDON_NY_OVERLAP';
-      else if (utcH >= 8 && utcH < 13)  session = 'LONDON';
-      else if (utcH >= 16 && utcH < 21) session = 'NEW_YORK';
-      if (session === 'ASIAN') return skip('session');
+      const BT_SESSIONS = [
+        { name: 'ASIAN',    start: 0,  end: 8,  pairs: ['USDJPY','AUDUSD','NZDUSD','EURJPY'], types: ['TYPE_B','TYPE_C'] },
+        { name: 'LONDON',   start: 8,  end: 16, pairs: ['EURUSD','GBPUSD','USDCHF','EURGBP'], types: null },
+        { name: 'NEW_YORK', start: 13, end: 21, pairs: ['EURUSD','GBPUSD','USDCAD','XAUUSD'], types: null },
+      ];
+      // Collect all sessions active now that include this symbol
+      const activeSess = BT_SESSIONS.filter(s => utcH >= s.start && utcH < s.end && s.pairs.includes(symbol));
+      if (!activeSess.length) return skip('session');
+      // Most permissive entry types among active sessions (null = all types allowed)
+      const typeRestrict = activeSess.every(s => s.types !== null)
+        ? [...new Set(activeSess.flatMap(s => s.types))] : null;
+      // Session name for metadata: prefer higher-priority sessions
+      const session = ['OVERLAP','NEW_YORK','LONDON','ASIAN'].find(n =>
+        activeSess.some(s => s.name === n || (n === 'OVERLAP' && activeSess.length > 1))
+      ) || activeSess[0].name;
 
       const regime = b._regime(mkt);
       if (!regime.signalAllowed) return skip('regime');
@@ -201,6 +211,7 @@ class Backtester {
 
       const entryType = b._entryType(mkt, bias.direction, loc);
       if (!entryType) return skip('entryType');
+      if (typeRestrict && !typeRestrict.includes(entryType)) return skip('entryType');
 
       const cf = b._confluence(mkt, bias.direction, loc, symbol, bias.h2Conflicts);
       const entryMin = { TYPE_A: 5, TYPE_B: 4, TYPE_C: 4, TYPE_D: 5 }[entryType] || 4;

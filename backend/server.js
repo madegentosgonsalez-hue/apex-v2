@@ -38,8 +38,52 @@ const brain2     = new Brain2({ dataService: data, aiAnalyst: ai, brain3, notifi
 const brain1     = new Brain1({ dataService: data, newsService: news, db });
 const learning   = new LearningEngine({ db });
 
-// Active pairs list (can be toggled from settings)
-let activePairs = ['EURUSD', 'XAUUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD'];
+// ── SESSION CONFIG ─────────────────────────────────────────────────────────────
+// Defines which pairs trade in each session, risk multipliers, and allowed entry types
+const SESSION_CONFIG = {
+  ASIAN: {
+    label: 'Asian', utcStart: 0, utcEnd: 8,
+    pairs:        ['USDJPY', 'AUDUSD', 'NZDUSD', 'EURJPY'],
+    allowedTypes: ['TYPE_B', 'TYPE_C'],
+    diamondRisk: 0.50, goldRisk: 0.375, silverRisk: 0.25,
+  },
+  LONDON: {
+    label: 'London', utcStart: 8, utcEnd: 16,
+    pairs:        ['EURUSD', 'GBPUSD', 'USDCHF', 'EURGBP'],
+    allowedTypes: ['TYPE_A', 'TYPE_B', 'TYPE_C', 'TYPE_D'],
+    diamondRisk: 1.00, goldRisk: 0.75,  silverRisk: 0.50,
+  },
+  NEW_YORK: {
+    label: 'New York', utcStart: 13, utcEnd: 21,
+    pairs:        ['EURUSD', 'GBPUSD', 'USDCAD', 'XAUUSD'],
+    allowedTypes: ['TYPE_A', 'TYPE_B', 'TYPE_C', 'TYPE_D'],
+    diamondRisk: 1.00, goldRisk: 0.75,  silverRisk: 0.50,
+  },
+};
+
+// All unique pairs across all sessions
+const ALL_PAIRS = [...new Set(Object.values(SESSION_CONFIG).flatMap(s => s.pairs))];
+
+function _getPairsForNow() {
+  const h = new Date().getUTCHours();
+  const pairs = new Set();
+  for (const cfg of Object.values(SESSION_CONFIG)) {
+    if (h >= cfg.utcStart && h < cfg.utcEnd) cfg.pairs.forEach(p => pairs.add(p));
+  }
+  return [...pairs];
+}
+
+function _getSessionForPair(pair) {
+  const h = new Date().getUTCHours();
+  // Overlap priority: NY > London > Asian
+  for (const [, cfg] of [['NY', SESSION_CONFIG.NEW_YORK], ['L', SESSION_CONFIG.LONDON], ['A', SESSION_CONFIG.ASIAN]]) {
+    if (h >= cfg.utcStart && h < cfg.utcEnd && cfg.pairs.includes(pair)) return cfg;
+  }
+  return null;
+}
+
+// Active pairs list — all sessions combined (server.js API and DB seeding)
+let activePairs = ALL_PAIRS;
 
 // Current scan state — read by /api/scan/state and /api/status
 let scanState = {
@@ -168,26 +212,35 @@ async function processSignal(signal, pair) {
 
 // ── CRON JOBS ─────────────────────────────────────────────────────────────────
 
-// Every 15 min: scan all pairs
+// Every 15 min: scan pairs active in current session
 cron.schedule('*/15 * * * *', async () => {
+  const sessionPairs = _getPairsForNow();
+  if (!sessionPairs.length) return; // No session active (UTC 21-00)
+
   scanState.scanning       = true;
   scanState.brain          = 'Brain1';
   scanState.lastScanAt     = new Date().toISOString();
   scanState.completedPairs = [];
   scanState.errorPairs     = [];
-  scanState.totalPairs     = activePairs.length;
+  scanState.totalPairs     = sessionPairs.length;
   scanState.currentPair    = null;
 
-  for (const pair of activePairs) {
+  for (const pair of sessionPairs) {
     scanState.currentPair = pair;
+    const sessCfg = _getSessionForPair(pair);
     try {
       const result = await brain1.scan(pair);
       const signal = result?.signal;
       scanState.completedPairs.push(pair);
       if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
-        const finalSignal = await processSignal(signal, pair);
+        // Gate entry type to session rules
+        if (sessCfg && !sessCfg.allowedTypes.includes(signal.entry_type)) {
+          sysLog('system', `${pair} ${signal.entry_type} not allowed in ${sessCfg.label} (${sessCfg.allowedTypes.join(',')})`, pair);
+          continue;
+        }
+        const finalSignal = await processSignal({ ...signal, session_label: sessCfg?.label || 'Unknown' }, pair);
         if (finalSignal) {
-          sysLog('signal', `Signal: ${finalSignal.confidence_tier} ${finalSignal.direction} on ${pair}${finalSignal.ai_conviction ? ` (AI: ${finalSignal.ai_conviction}%)` : ''}`, pair, finalSignal.confidence_tier);
+          sysLog('signal', `[${sessCfg?.label}] ${finalSignal.confidence_tier} ${finalSignal.direction} on ${pair}${finalSignal.ai_conviction ? ` (AI: ${finalSignal.ai_conviction}%)` : ''}`, pair, finalSignal.confidence_tier);
           await handleSignal(finalSignal, pair);
         }
       }
@@ -370,25 +423,34 @@ app.get('/api/trades/open', async (req, res) => {
 
 // POST /api/scan/manual
 app.post('/api/scan/manual', async (req, res) => {
+  const sessionPairs = _getPairsForNow();
+  const scanPairs = sessionPairs.length ? sessionPairs : ALL_PAIRS; // Outside hours: scan all for preview
+
   scanState.scanning       = true;
   scanState.brain          = 'Brain1';
   scanState.lastScanAt     = new Date().toISOString();
   scanState.completedPairs = [];
   scanState.errorPairs     = [];
-  scanState.totalPairs     = activePairs.length;
+  scanState.totalPairs     = scanPairs.length;
   const results = [];
-  for (const pair of activePairs) {
+
+  for (const pair of scanPairs) {
     scanState.currentPair = pair;
+    const sessCfg = _getSessionForPair(pair);
     try {
       const result = await brain1.scan(pair);
       const signal = result?.signal;
       const reason = result?.reason;
       scanState.completedPairs.push(pair);
       if (signal && signal.direction && signal.direction !== 'NEUTRAL') {
-        const finalSignal = await processSignal(signal, pair);
+        if (sessCfg && !sessCfg.allowedTypes.includes(signal.entry_type)) {
+          results.push({ pair, signal: 'TYPE_BLOCKED', reason: `${signal.entry_type} not allowed in ${sessCfg.label}` });
+          continue;
+        }
+        const finalSignal = await processSignal({ ...signal, session_label: sessCfg?.label || 'Unknown' }, pair);
         results.push({ pair, signal: finalSignal?.confidence_tier || 'SKIP', reason });
         if (finalSignal) {
-          sysLog('signal', `Manual scan signal: ${finalSignal.confidence_tier} on ${pair}${finalSignal.ai_conviction ? ` (AI: ${finalSignal.ai_conviction}%)` : ''}`, pair);
+          sysLog('signal', `[${sessCfg?.label}] Manual signal: ${finalSignal.confidence_tier} on ${pair}`, pair);
           await handleSignal(finalSignal, pair);
         }
       } else {
@@ -403,7 +465,7 @@ app.post('/api/scan/manual', async (req, res) => {
   scanState.scanning    = false;
   scanState.brain       = null;
   scanState.currentPair = null;
-  res.json({ scanned: activePairs, signals: results.filter(r => r.signal && r.signal !== 'NONE').length, results });
+  res.json({ scanned: scanPairs, signals: results.filter(r => r.signal && r.signal !== 'NONE').length, results });
 });
 
 // GET /api/scan/state  — lightweight, polled every 4s by activity panel

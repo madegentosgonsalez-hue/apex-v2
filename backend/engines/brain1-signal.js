@@ -39,7 +39,7 @@ class Brain1 {
 
       // STEP 4 — Top-down directional bias (Weekly + Daily must agree)
       const bias = this._topDownBias(mkt);
-      if (bias.direction === 'NEUTRAL') return this._skip(symbol, 'HTF conflict — W and D disagree');
+      if (bias.direction === 'NEUTRAL') return this._skip(symbol, `Bias NEUTRAL — W:${bias.weekly} D:${bias.daily} H4:${bias.h4}`);
 
       // STEP 5 — Location: is price at a meaningful level?
       const loc = this._locationCheck(mkt, bias.direction);
@@ -122,24 +122,31 @@ class Brain1 {
   // ── TOP-DOWN BIAS ─────────────────────────────────────────────────────────
   // FLAW-10 FIX: H2 bridge now participates as a confirmation gate
   _topDownBias(mkt) {
-    const weekly = this._bias(mkt.weekly, 3); // 3 confirmed swings on weekly is sufficient
-    const daily  = this._bias(mkt.daily,  3); // 3 confirmed swings on daily
+    const weekly = this._bias(mkt.weekly, 3);
+    const daily  = this._bias(mkt.daily,  3);
     const h4     = this._bias(mkt.h4,     3);
     const h2     = this._bias(mkt.h2,     3);
 
-    // RULE: Weekly AND Daily must agree — that's the direction
-    if (weekly === daily && weekly !== 'NEUTRAL') {
-      // FLAW-10 FIX: H2 must not contradict H4
-      // If H2 is showing opposite direction to H4, setup is not clean — downgrade
-      const h2Conflicts = h2 !== 'NEUTRAL' && h2 !== h4;
-      return {
-        direction:    weekly,
-        strength:     weekly === h4 ? (h2Conflicts ? 'MODERATE' : 'STRONG') : 'MODERATE',
-        h2Conflicts,  // Flagged for AI context and confluence weighting
-        weekly, daily, h4, h2,
-      };
-    }
-    return { direction: 'NEUTRAL', weekly, daily, h4, h2 };
+    // Rule 1: Weekly must establish the trend — no weekly trend = no trade
+    if (weekly === 'NEUTRAL') return { direction: 'NEUTRAL', weekly, daily, h4, h2 };
+
+    // Rule 2: Daily must not actively oppose weekly
+    //   NEUTRAL = pullback phase = allowed (most profitable ICT setups happen here)
+    //   OPPOSITE = daily fighting weekly = skip
+    if (daily !== 'NEUTRAL' && daily !== weekly) return { direction: 'NEUTRAL', weekly, daily, h4, h2 };
+
+    // Rule 3: H4 must confirm weekly direction — this is the execution trigger
+    if (h4 !== weekly) return { direction: 'NEUTRAL', weekly, daily, h4, h2 };
+
+    const h2Conflicts = h2 !== 'NEUTRAL' && h2 !== weekly;
+    const isPullback  = daily === 'NEUTRAL';
+    return {
+      direction:   weekly,
+      strength:    isPullback ? 'PULLBACK' : (h2Conflicts ? 'MODERATE' : 'STRONG'),
+      h2Conflicts,
+      isPullback,
+      weekly, daily, h4, h2,
+    };
   }
 
   // FLAW-01 FIX: Structure MUST be confirmed before EMA can support bias
@@ -315,8 +322,10 @@ class Brain1 {
     const regime = this._regime(mkt).label;
     const f      = {};
 
-    // Factor 1: HTF trend — both Weekly AND Daily agree
-    f.htfAligned = this._bias(mkt.weekly, 5) === dir && this._bias(mkt.daily, 4) === dir;
+    // Factor 1: HTF alignment — weekly must trend, daily can be neutral (pullback ok)
+    const wBias = this._bias(mkt.weekly, 3);
+    const dBias = this._bias(mkt.daily,  3);
+    f.htfAligned = wBias === dir && (dBias === dir || dBias === 'NEUTRAL');
 
     // Factor 2: Price at key level
     f.keyLevel = loc.valid;
@@ -749,10 +758,10 @@ class Brain1 {
     const utcH = new Date().getUTCHours();
     if (sessionType === 'CRYPTO') return { active: true };
     if (sessionType === 'FOREX') {
-      const londonOpen = utcH >= 8  && utcH < 16;
-      const nyOpen     = utcH >= 13 && utcH < 21;
-      const ok = londonOpen || nyOpen;
-      return ok ? { active: true } : { active: false, reason: 'Outside London/NY hours (UTC 08-16, 13-21)' };
+      // Server.js controls which pairs trade in which session —
+      // Brain1 just validates that at least one forex session is open (00-21 UTC)
+      const ok = utcH < 21;
+      return ok ? { active: true } : { active: false, reason: 'All forex sessions closed (UTC 21-00)' };
     }
     if (sessionType === 'STOCKS') {
       const ok = utcH >= 15 && utcH < 21; // NYSE 09:30-16:00 EST = 14:30-21:00 UTC, skip first 30min
@@ -768,7 +777,7 @@ class Brain1 {
 
   _currentSession() {
     const h = new Date().getUTCHours();
-    if (h >= 13 && h < 16) return 'LONDON_NY_OVERLAP';
+    if (h >= 13 && h < 16) return 'OVERLAP';
     if (h >= 8  && h < 13) return 'LONDON';
     if (h >= 16 && h < 21) return 'NEW_YORK';
     if (h >= 0  && h < 8)  return 'ASIAN';
