@@ -1,0 +1,19 @@
+# Dependencies
+backend/node_modules/
+
+# Secrets
+backend/.env
+frontend/.env
+.env
+
+# Logs
+*.log
+logs/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+
+# Runtime artifacts
+backend/tmp/
+backend/cache/
