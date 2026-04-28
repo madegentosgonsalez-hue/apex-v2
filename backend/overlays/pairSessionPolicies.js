@@ -25,6 +25,23 @@ const POLICIES = {
     AUDUSD: { sessions: ['ASIAN', 'OVERLAP'], minTier: 'GOLD' },
     USDCHF: { sessions: ['LONDON', 'OVERLAP'], minTier: 'GOLD' },
   },
+  real15m_focus: {
+    GBPUSD: { disabled: true },
+    USDCAD: { disabled: true },
+    AUDUSD: { disabled: true },
+    USDJPY: { disabled: true },
+    EURUSD: { sessions: ['LONDON', 'NEW_YORK', 'OVERLAP'], minTier: 'GOLD' },
+    USDCHF: { sessions: ['LONDON', 'OVERLAP'], minTier: 'GOLD' },
+    GBPJPY: { sessions: ['NEW_YORK', 'OVERLAP'], minTier: 'GOLD' },
+    EURJPY: { sessions: ['OVERLAP'], minTier: 'GOLD' },
+  },
+  real15m_growth: {
+    GBPUSD: { disabled: true },
+    USDCAD: { disabled: true },
+    AUDUSD: { disabled: true },
+    USDJPY: { disabled: true },
+    EURJPY: { sessions: ['OVERLAP'] },
+  },
 };
 
 function getPairPolicy(name = 'none') {

@@ -7,6 +7,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "backtest": "node backtest.js",
+    "research:matrix": "node scripts/research-matrix.js",
     "test": "node test/strategy.test.js"
   },
   "dependencies": {

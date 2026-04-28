@@ -403,6 +403,7 @@ class AIAnalyst {
   }
 
   async _log({ brain, signalId, symbol, input, resp, ms }) {
+    if (!this.db?.saveAIDecision) return;
     try {
       await this.db.saveAIDecision({
         signal_id:  signalId,

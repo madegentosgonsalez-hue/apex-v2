@@ -17,3 +17,5 @@ Thumbs.db
 # Runtime artifacts
 backend/tmp/
 backend/cache/
+backend/research/cache/
+backend/research/results/
