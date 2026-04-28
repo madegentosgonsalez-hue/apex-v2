@@ -30,11 +30,14 @@ class Backtester {
 
   _ema(closes, period) {
     if (!closes.length) return null;
-    if (closes.length < period) {
-      // Not enough bars for true EMA — SMA approximation so nulls don't block bias
-      return closes.reduce((a, b) => a + b, 0) / closes.length;
-    }
     const k = 2 / (period + 1);
+    if (closes.length < period) {
+      // Fewer bars than period: seed from first close and run EMA forward
+      // This keeps ema21 faster than ema50 even with sparse data
+      let v = closes[0];
+      for (let i = 1; i < closes.length; i++) v = closes[i] * k + v * (1 - k);
+      return v;
+    }
     let v = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
     for (let i = period; i < closes.length; i++) v = closes[i] * k + v * (1 - k);
     return v;
