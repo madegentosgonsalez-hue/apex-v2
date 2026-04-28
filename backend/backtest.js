@@ -78,11 +78,16 @@ class Backtester {
     return Math.abs(pdi - mdi) / (pdi + mdi + 1e-9) * 100;
   }
 
-  _swings(values, isHigh) {
+  _swings(values, isHigh, lookback = 2) {
     const r = [];
-    for (let i = 1; i < values.length - 1; i++) {
-      if (isHigh && values[i] > values[i - 1] && values[i] > values[i + 1]) r.push(values[i]);
-      if (!isHigh && values[i] < values[i - 1] && values[i] < values[i + 1]) r.push(values[i]);
+    for (let i = lookback; i < values.length - lookback; i++) {
+      const center = values[i];
+      let isPeak = true;
+      for (let j = 1; j <= lookback; j++) {
+        if (isHigh  && (values[i - j] >= center || values[i + j] >= center)) { isPeak = false; break; }
+        if (!isHigh && (values[i - j] <= center || values[i + j] <= center)) { isPeak = false; break; }
+      }
+      if (isPeak) r.push(center);
     }
     return r;
   }
