@@ -37,6 +37,8 @@ async function boot() {
   const data = new DataService({
     taapiKey:     process.env.TAAPI_API_KEY,
     twelveDataKey: process.env.TWELVE_DATA_API_KEY,
+    polygonKey: process.env.POLYGON_API_KEY,
+    marketDataProvider: process.env.MARKET_DATA_PROVIDER,
   });
 
   const news = new NewsService({
@@ -377,7 +379,7 @@ async function boot() {
     console.log(`   Database   : ${process.env.DATABASE_URL ? '✅ PostgreSQL' : '⚠️  Memory (set DATABASE_URL)'}`);
     console.log(`   AI         : ${process.env.ANTHROPIC_API_KEY ? '✅ Claude API' : '⚠️  Mock mode (set ANTHROPIC_API_KEY)'}`);
     console.log(`   Telegram   : ${telegram.active ? '✅ Connected' : '⚠️  Not configured (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)'}`);
-    console.log(`   Market Data: ${process.env.TAAPI_API_KEY || process.env.TWELVE_DATA_API_KEY ? '✅ Live' : '⚠️  Mock data (set TAAPI_API_KEY or TWELVE_DATA_API_KEY)'}`);
+    console.log(`   Market Data: ${process.env.TAAPI_API_KEY || process.env.TWELVE_DATA_API_KEY || process.env.POLYGON_API_KEY ? `✅ Live (${process.env.MARKET_DATA_PROVIDER || 'auto'})` : '⚠️  Mock data (set TAAPI_API_KEY, TWELVE_DATA_API_KEY, or POLYGON_API_KEY)'}`);
     console.log(`   Mode       : ${process.env.PAPER_TRADE === 'false' ? '🔴 LIVE' : '📋 PAPER'}`);
     console.log('');
     console.log('   Crons: Brain1 15min | Brain2 5min | News 30min');

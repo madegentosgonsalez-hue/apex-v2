@@ -164,6 +164,54 @@ class Backtester {
   // ── FETCH 1H HISTORICAL FROM TWELVE DATA ───────────────────────────────
 
   async _fetchH1(symbol, yearsBack) {
+    const provider = String(process.env.MARKET_DATA_PROVIDER || 'twelve').toLowerCase();
+    const polygonKey = process.env.POLYGON_API_KEY;
+    if (provider === 'polygon' && polygonKey && /^[A-Z]{6}$/.test(symbol)) {
+      const end = new Date();
+      const start = new Date();
+      start.setFullYear(start.getFullYear() - yearsBack);
+      const ticker = `C:${symbol}`;
+      const chunkDays = 30;
+      const all = [];
+      let cursor = new Date(start);
+      let requestCount = 0;
+
+      while (cursor < end) {
+        const chunkStart = new Date(cursor);
+        const chunkEnd = new Date(cursor);
+        chunkEnd.setDate(chunkEnd.getDate() + chunkDays);
+        if (chunkEnd > end) chunkEnd.setTime(end.getTime());
+
+        if (requestCount > 0) {
+          await new Promise(r => setTimeout(r, 12500)); // 5 calls/minute on free plan.
+        }
+
+        const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(ticker)}/range/1/hour/${chunkStart.toISOString().slice(0, 10)}/${chunkEnd.toISOString().slice(0, 10)}?adjusted=true&sort=asc&limit=50000&apiKey=${polygonKey}`;
+        const resp = await fetch(url);
+        const json = await resp.json();
+        if (!Array.isArray(json?.results)) {
+          throw new Error(json?.error || json?.message || `Polygon: no H1 results for ${symbol} ${chunkStart.toISOString().slice(0, 10)}-${chunkEnd.toISOString().slice(0, 10)}`);
+        }
+
+        all.push(...json.results.map((v) => ({
+          datetime: new Date(v.t).toISOString().slice(0, 19).replace('T', ' '),
+          open: Number(v.o),
+          high: Number(v.h),
+          low: Number(v.l),
+          close: Number(v.c),
+          volume: Number(v.v || 0),
+        })));
+
+        requestCount++;
+        cursor = new Date(chunkEnd);
+        cursor.setDate(cursor.getDate() + 1);
+      }
+
+      return all
+        .sort((a, b) => new Date(a.datetime) - new Date(b.datetime))
+        .filter((c, idx, arr) => idx === 0 || c.datetime !== arr[idx - 1].datetime);
+    }
+
     const symbolMap = {
       XAUUSD: 'XAU/USD',
       USDCAD: 'USD/CAD',

@@ -14,17 +14,22 @@ const MOCK_BASE_PRICES = {
 };
 
 class DataService {
-  constructor({ taapiKey, twelveDataKey } = {}) {
+  constructor({ taapiKey, twelveDataKey, polygonKey, marketDataProvider } = {}) {
     this.taapiKey    = taapiKey;
     this.twelveKey   = twelveDataKey;
+    this.polygonKey  = polygonKey;
+    this.provider    = (marketDataProvider || 'auto').toLowerCase();
     this.taapiBase   = 'https://api.taapi.io';
     this.twelveBase  = 'https://api.twelvedata.com';
+    this.polygonBase = 'https://api.polygon.io';
     this.cache         = new Map();
     this.cacheTTL      = 5 * 60 * 1000; // 5 min
     this.mockSeeds     = {};
     // Rate-limit queue: serializes all Twelve Data API calls
     this._twelveQueue  = Promise.resolve();
     this._twelveDelay  = 800; // ms between calls — stays under 8/min free-tier limit
+    this._polygonQueue = Promise.resolve();
+    this._polygonDelay = 12500; // 5 calls/minute on free tier.
   }
 
   // ── GET CANDLE DATA (indicators included) ─────────────────────────────────
@@ -35,10 +40,16 @@ class DataService {
 
     let data;
     try {
-      if (this.taapiKey) {
+      if (this.provider === 'polygon' && this.polygonKey && this._polygonSupportsSymbol(symbol)) {
+        data = await this._polygonGet(symbol, interval, size);
+      } else if (this.provider === 'twelve' && this.twelveKey) {
+        data = await this._twelveGet(symbol, interval, size);
+      } else if (this.taapiKey && this.provider !== 'polygon') {
         data = await this._taapiGet(symbol, interval, size);
       } else if (this.twelveKey) {
         data = await this._twelveGet(symbol, interval, size);
+      } else if (this.polygonKey && this._polygonSupportsSymbol(symbol)) {
+        data = await this._polygonGet(symbol, interval, size);
       } else {
         data = this._mockCandles(symbol, interval, size);
       }
@@ -54,6 +65,14 @@ class DataService {
   // ── CURRENT TICK PRICE ────────────────────────────────────────────────────
   async getCurrentPrice(symbol) {
     try {
+      if (this.provider === 'polygon' && this.polygonKey && this._polygonSupportsSymbol(symbol)) {
+        const pair = this._toPolygonPair(symbol);
+        const r = await this._polygonFetch(
+          `${this.polygonBase}/v1/conversion/${pair.from}/${pair.to}?amount=1&apiKey=${this.polygonKey}`
+        );
+        const price = Number(r?.converted || r?.value || r?.last?.ask || r?.last?.bid || 0);
+        if (price > 0) return { price, source: 'polygon' };
+      }
       if (this.twelveKey) {
         const r = await this._fetch(`${this.twelveBase}/price?symbol=${this._toTD(symbol)}&apikey=${this.twelveKey}`);
         return { price: parseFloat(r.price), source: '12data' };
@@ -170,6 +189,48 @@ class DataService {
       rsi:   rsiArr[rsiArr.length - 1],
       atr:   atrArr[atrArr.length - 1],
       adx:   this._adx(candles, 14),
+    });
+  }
+
+  async _polygonGet(symbol, interval, size) {
+    if (!this._polygonSupportsSymbol(symbol)) {
+      throw new Error(`Polygon does not support ${symbol} in this adapter`);
+    }
+    const { multiplier, timespan, minutes } = this._toPolygonResolution(interval);
+    const to = new Date();
+    const from = new Date(to.getTime() - (Math.max(size, 10) * minutes * 60 * 1000 * 1.4));
+    const ticker = this._toPolygonTicker(symbol);
+    const url = `${this.polygonBase}/v2/aggs/ticker/${encodeURIComponent(ticker)}/range/${multiplier}/${timespan}/${from.toISOString().slice(0, 10)}/${to.toISOString().slice(0, 10)}?adjusted=true&sort=asc&limit=50000&apiKey=${this.polygonKey}`;
+
+    const resp = await this._polygonFetch(url);
+    if (!Array.isArray(resp?.results)) {
+      throw new Error(resp?.error || resp?.message || `Polygon: no results for ${symbol} ${interval}`);
+    }
+
+    const candles = resp.results.slice(-size).map((c) => ({
+      open: Number(c.o),
+      high: Number(c.h),
+      low: Number(c.l),
+      close: Number(c.c),
+      volume: Number(c.v || 0),
+    }));
+
+    if (!candles.length) {
+      throw new Error(`Polygon: empty candle set for ${symbol} ${interval}`);
+    }
+
+    const closes = candles.map(c => c.close);
+    const ema21Arr = this._ema(closes, 21);
+    const ema50Arr = this._ema(closes, 50);
+    const rsiArr = this._rsi(closes, 14);
+    const atrArr = this._atr(candles, 14);
+
+    return this._buildCandleObj(candles, {
+      ema21: ema21Arr[ema21Arr.length - 1],
+      ema50: ema50Arr[ema50Arr.length - 1],
+      rsi: rsiArr[rsiArr.length - 1],
+      atr: atrArr[atrArr.length - 1],
+      adx: this._adx(candles, 14),
     });
   }
 
@@ -351,11 +412,47 @@ class DataService {
     return map[interval] || interval;
   }
 
+  _polygonSupportsSymbol(symbol) {
+    return /^[A-Z]{6}$/.test(symbol);
+  }
+
+  _toPolygonTicker(symbol) {
+    return `C:${symbol}`;
+  }
+
+  _toPolygonPair(symbol) {
+    return { from: symbol.slice(0, 3), to: symbol.slice(3) };
+  }
+
+  _toPolygonResolution(interval) {
+    const map = {
+      '15m': { multiplier: 15, timespan: 'minute', minutes: 15 },
+      '30m': { multiplier: 30, timespan: 'minute', minutes: 30 },
+      '1h': { multiplier: 1, timespan: 'hour', minutes: 60 },
+      '2h': { multiplier: 2, timespan: 'hour', minutes: 120 },
+      '4h': { multiplier: 4, timespan: 'hour', minutes: 240 },
+      '1D': { multiplier: 1, timespan: 'day', minutes: 1440 },
+      '1W': { multiplier: 7, timespan: 'day', minutes: 10080 },
+    };
+    return map[interval] || { multiplier: 1, timespan: 'hour', minutes: 60 };
+  }
+
   async _fetch(url, opts = {}) {
     const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
     const res = await fetch(url, { ...opts, headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
     return res.json();
+  }
+
+  async _polygonFetch(url) {
+    return (this._polygonQueue = this._polygonQueue.then(async () => {
+      const data = await this._fetch(url);
+      await new Promise(r => setTimeout(r, this._polygonDelay));
+      return data;
+    }).catch(async (err) => {
+      await new Promise(r => setTimeout(r, this._polygonDelay));
+      throw err;
+    }));
   }
 
   _getCache(key) {
