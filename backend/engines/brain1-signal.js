@@ -778,16 +778,15 @@ class Brain1 {
   // ── FETCH ALL TIMEFRAMES ──────────────────────────────────────────────────
   async _fetchAll(symbol) {
     try {
-      const [weekly, daily, h4, h2, h1, m30, m15, intermarket] = await Promise.all([
-        this.data.getCandles(symbol, '1W',  52),
-        this.data.getCandles(symbol, '1D',  100),
-        this.data.getCandles(symbol, '4h',  100),
-        this.data.getCandles(symbol, '2h',  100),
-        this.data.getCandles(symbol, '1h',  100),
-        this.data.getCandles(symbol, '30m', 80),
-        this.data.getCandles(symbol, '15m', 50),
-        this.data.getIntermarket(symbol),
-      ]);
+      // Sequential fetches prevent rate-limit bursts on Twelve Data free tier
+      const weekly = await this.data.getCandles(symbol, '1W',  52);
+      const daily  = await this.data.getCandles(symbol, '1D',  100);
+      const h4     = await this.data.getCandles(symbol, '4h',  100);
+      const h2     = await this.data.getCandles(symbol, '2h',  100);
+      const h1     = await this.data.getCandles(symbol, '1h',  100);
+      const m30    = await this.data.getCandles(symbol, '30m', 80);
+      const m15    = await this.data.getCandles(symbol, '15m', 50);
+      const intermarket = await this.data.getIntermarket(symbol);
       if (!h4 || h4.closes?.length < 20) return null;
       return { weekly, daily, h4, h2, h1, m30, m15, intermarket };
     } catch (err) {

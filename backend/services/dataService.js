@@ -19,9 +19,12 @@ class DataService {
     this.twelveKey   = twelveDataKey;
     this.taapiBase   = 'https://api.taapi.io';
     this.twelveBase  = 'https://api.twelvedata.com';
-    this.cache       = new Map();
-    this.cacheTTL    = 5 * 60 * 1000; // 5 min
-    this.mockSeeds   = {}; // Stable mock seeds per symbol
+    this.cache         = new Map();
+    this.cacheTTL      = 5 * 60 * 1000; // 5 min
+    this.mockSeeds     = {};
+    // Rate-limit queue: serializes all Twelve Data API calls
+    this._twelveQueue  = Promise.resolve();
+    this._twelveDelay  = 800; // ms between calls — stays under 8/min free-tier limit
   }
 
   // ── GET CANDLE DATA (indicators included) ─────────────────────────────────
@@ -128,10 +131,18 @@ class DataService {
     const sym  = this._toTD(symbol);
     const intv = this._toTDInterval(interval);
 
-    // Single time_series call — no 6-way parallel fan-out that hits rate limits
-    const ts = await this._fetch(
-      `${this.twelveBase}/time_series?symbol=${encodeURIComponent(sym)}&interval=${intv}&outputsize=${size}&apikey=${this.twelveKey}&format=JSON`
-    );
+    // Serialize through queue + enforce minimum gap between calls
+    const result = await (this._twelveQueue = this._twelveQueue.then(async () => {
+      const ts = await this._fetch(
+        `${this.twelveBase}/time_series?symbol=${encodeURIComponent(sym)}&interval=${intv}&outputsize=${size}&apikey=${this.twelveKey}&format=JSON`
+      );
+      await new Promise(r => setTimeout(r, this._twelveDelay));
+      return ts;
+    }).catch(async (err) => {
+      await new Promise(r => setTimeout(r, this._twelveDelay));
+      throw err;
+    }));
+    const ts = result;
 
     if (ts.status === 'error' || !Array.isArray(ts.values)) {
       throw new Error(ts.message || `Twelve Data: no values for ${symbol} ${interval}`);
