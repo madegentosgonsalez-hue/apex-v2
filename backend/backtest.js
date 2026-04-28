@@ -176,7 +176,7 @@ class Backtester {
         h4:          this._buildTF(h4s.slice(-100)),
         h2:          this._buildTF(h2s.slice(-100)),
         h1:          this._buildTF(h1s.slice(-100)),
-        m30:         null,
+        m30:         this._buildTF(h1s.slice(-40)),
         m15:         null,
         intermarket: { dxyTrend: 'UNKNOWN', vix: null, btcDominance: null },
       };
