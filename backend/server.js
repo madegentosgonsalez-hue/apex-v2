@@ -614,6 +614,93 @@ app.post('/api/telegram/test', async (req, res) => {
   }
 });
 
+// GET /api/debug/scan/:symbol — full Brain1 analysis bypassing session filter
+app.get('/api/debug/scan/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const b = brain1;
+  const steps = [];
+
+  try {
+    const mkt = await b._fetchAll(symbol);
+    if (!mkt) return res.json({ symbol, error: 'Data unavailable — check API keys', steps });
+
+    steps.push({
+      step: 'DATA_FETCH', ok: true,
+      msg: `H4: ${mkt.h4?.candles?.length || 0} bars | H1: ${mkt.h1?.candles?.length || 0} | W: ${mkt.weekly?.candles?.length || 0} | D: ${mkt.daily?.candles?.length || 0}`,
+    });
+
+    const regime = b._regime(mkt);
+    steps.push({
+      step: 'REGIME', ok: regime.signalAllowed,
+      msg: `${regime.label} | ADX: ${mkt.h4?.adx?.toFixed(1)} | ATR ratio: ${regime.atrRatio?.toFixed(2) ?? 'N/A'}`,
+    });
+
+    const bias = b._topDownBias(mkt);
+    steps.push({
+      step: 'TOP_DOWN_BIAS', ok: bias.direction !== 'NEUTRAL',
+      msg: `Weekly=${bias.weekly} Daily=${bias.daily} H4=${bias.h4} H2=${bias.h2} → ${bias.direction}${bias.h2Conflicts ? ' ⚠ H2 conflict' : ''}`,
+    });
+
+    if (!regime.signalAllowed || bias.direction === 'NEUTRAL') {
+      return res.json({ symbol, finalResult: 'SKIPPED', blockedAt: !regime.signalAllowed ? 'REGIME' : 'BIAS', steps });
+    }
+
+    const loc = b._locationCheck(mkt, bias.direction);
+    steps.push({
+      step: 'LOCATION', ok: loc.valid,
+      msg: loc.valid
+        ? `${loc.type} @ ${loc.price?.toFixed(5)} | current price: ${loc.currentPrice?.toFixed(5)}`
+        : `No key level within ${(mkt.h4?.atr * 0.6)?.toFixed(5) ?? '?'} ATR tolerance`,
+    });
+
+    if (!loc.valid) return res.json({ symbol, finalResult: 'SKIPPED', blockedAt: 'LOCATION', steps });
+
+    const entryType = b._entryType(mkt, bias.direction, loc);
+    steps.push({
+      step: 'ENTRY_TYPE', ok: !!entryType,
+      msg: entryType || 'No pattern — sweep/MSB/FVG/OB/EMA conditions not met',
+    });
+
+    if (!entryType) return res.json({ symbol, finalResult: 'SKIPPED', blockedAt: 'ENTRY_TYPE', steps });
+
+    const cf = b._confluence(mkt, bias.direction, loc, symbol, bias.h2Conflicts);
+    const minReq = { TYPE_A: 5, TYPE_B: 4, TYPE_C: 4, TYPE_D: 5 }[entryType] || 4;
+    steps.push({
+      step: 'CONFLUENCE', ok: cf.score >= minReq,
+      msg: `Score ${cf.score}/9 (need ${minReq}) | ` +
+        Object.entries(cf.factors).map(([k, v]) => `${k}:${v ? '✓' : '✗'}`).join(' '),
+    });
+
+    const levels = b._levels(mkt, bias.direction, loc);
+    steps.push({
+      step: 'LEVELS', ok: levels.valid && levels.rr >= 2,
+      msg: levels.valid
+        ? `Entry:${levels.entry?.toFixed(5)} SL:${levels.sl?.toFixed(5)} TP1:${levels.tp1?.toFixed(5)} TP2:${levels.tp2?.toFixed(5)} | RR:${levels.rr} | ATR:${levels.atr?.toFixed(5)}`
+        : 'Invalid — zero ATR or no structure level',
+    });
+
+    const tier  = b._tier(cf.score);
+    const allOk = regime.signalAllowed && bias.direction !== 'NEUTRAL' && loc.valid && !!entryType && cf.score >= minReq && levels.valid && levels.rr >= 2;
+
+    res.json({
+      symbol,
+      finalResult:  allOk ? 'SIGNAL' : 'SKIPPED',
+      blockedAt:    allOk ? null : steps.find(s => !s.ok)?.step,
+      direction:    bias.direction,
+      tier:         tier.label,
+      score:        cf.score,
+      entryType,
+      currentPrice: loc.currentPrice,
+      levels:       levels.valid ? levels : null,
+      sessionNow:   getSession(),
+      sessionNote:  'Session filter bypassed — live scan would be blocked outside London/NY',
+      steps,
+    });
+  } catch (err) {
+    res.status(500).json({ symbol, error: err.message, steps });
+  }
+});
+
 // POST /api/backtest — starts async backtest job
 app.post('/api/backtest', async (req, res) => {
   const { symbol = 'EURUSD', yearsBack = 1 } = req.body || {};

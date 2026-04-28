@@ -155,6 +155,7 @@ class Backtester {
   // ── BRAIN1 ANALYSIS ON HISTORICAL SNAPSHOT ─────────────────────────────
 
   _analyzeSnapshot(symbol, h4s, h2s, h1s, d1s, w1s, ts) {
+    const skip = (reason) => ({ signal: null, skipReason: reason });
     try {
       const b = this.brain1;
       const mkt = {
@@ -167,55 +168,57 @@ class Backtester {
         m15:         null,
         intermarket: { dxyTrend: 'UNKNOWN', vix: null, btcDominance: null },
       };
-      if (!mkt.h4 || !mkt.daily || !mkt.weekly) return null;
+      if (!mkt.h4 || !mkt.daily || !mkt.weekly) return skip('regime');
 
-      const regime = b._regime(mkt);
-      if (!regime.signalAllowed) return null;
-
-      const bias = b._topDownBias(mkt);
-      if (bias.direction === 'NEUTRAL') return null;
-
-      const loc = b._locationCheck(mkt, bias.direction);
-      if (!loc.valid) return null;
-
-      const entryType = b._entryType(mkt, bias.direction, loc);
-      if (!entryType) return null;
-
-      const cf = b._confluence(mkt, bias.direction, loc, symbol, bias.h2Conflicts);
-      if (cf.score < (SIGNAL_RULES.MIN_CONFLUENCE || 4)) return null;
-
-      const entryMin = { TYPE_A: 5, TYPE_B: 4, TYPE_C: 4, TYPE_D: 5 }[entryType] || 4;
-      if (cf.score < entryMin) return null;
-
-      const levels = b._levels(mkt, bias.direction, loc);
-      if (!levels.valid) return null;
-      if (levels.rr < (SIGNAL_RULES.MIN_RR || 2.0)) return null;
-
-      const tier = b._tier(cf.score);
-
+      // Session filter first — cheapest check
       const utcH = ts.getUTCHours();
       let session = 'ASIAN';
       if (utcH >= 13 && utcH < 16)      session = 'LONDON_NY_OVERLAP';
       else if (utcH >= 8 && utcH < 13)  session = 'LONDON';
       else if (utcH >= 16 && utcH < 21) session = 'NEW_YORK';
-      if (session === 'ASIAN') return null;
+      if (session === 'ASIAN') return skip('session');
+
+      const regime = b._regime(mkt);
+      if (!regime.signalAllowed) return skip('regime');
+
+      const bias = b._topDownBias(mkt);
+      if (bias.direction === 'NEUTRAL') return skip('bias');
+
+      const loc = b._locationCheck(mkt, bias.direction);
+      if (!loc.valid) return skip('location');
+
+      const entryType = b._entryType(mkt, bias.direction, loc);
+      if (!entryType) return skip('entryType');
+
+      const cf = b._confluence(mkt, bias.direction, loc, symbol, bias.h2Conflicts);
+      const entryMin = { TYPE_A: 5, TYPE_B: 4, TYPE_C: 4, TYPE_D: 5 }[entryType] || 4;
+      const minScore = Math.max(SIGNAL_RULES.MIN_CONFLUENCE || 4, entryMin);
+      if (cf.score < minScore) return skip('confluence');
+
+      const levels = b._levels(mkt, bias.direction, loc);
+      if (!levels.valid || levels.rr < (SIGNAL_RULES.MIN_RR || 2.0)) return skip('levels');
+
+      const tier = b._tier(cf.score);
 
       return {
-        symbol, direction: bias.direction,
-        entry_type:       entryType,
-        entry_price:      levels.entry,
-        stop_loss:        levels.sl,
-        tp1:              levels.tp1,
-        tp2:              levels.tp2,
-        rr_ratio:         levels.rr,
-        confluence_score: cf.score,
-        confidence_tier:  tier.label,
-        regime:           regime.label,
-        session,
-        timestamp:        ts.toISOString(),
-        month:            ts.toISOString().slice(0, 7),
+        signal: {
+          symbol, direction: bias.direction,
+          entry_type:       entryType,
+          entry_price:      levels.entry,
+          stop_loss:        levels.sl,
+          tp1:              levels.tp1,
+          tp2:              levels.tp2,
+          rr_ratio:         levels.rr,
+          confluence_score: cf.score,
+          confidence_tier:  tier.label,
+          regime:           regime.label,
+          session,
+          timestamp:        ts.toISOString(),
+          month:            ts.toISOString().slice(0, 7),
+        },
+        skipReason: null,
       };
-    } catch { return null; }
+    } catch { return { signal: null, skipReason: 'regime' }; }
   }
 
   // ── SIMULATE 40/40/20 EXIT ──────────────────────────────────────────────
@@ -291,13 +294,13 @@ class Backtester {
 
   async runBacktest(symbol, yearsBack = 1, onProgress = null) {
     console.log(`[Backtest] ${symbol} — fetching ${yearsBack}Y of 1H data...`);
-    if (onProgress) onProgress({ step: 'fetching', pct: 5 });
+    if (onProgress) onProgress(5, 'Fetching historical data…');
 
     const h1Raw = await this._fetchH1(symbol, yearsBack);
     if (!h1Raw || h1Raw.length < 200) throw new Error(`Insufficient data: ${h1Raw?.length || 0} candles`);
 
     console.log(`[Backtest] ${symbol} — ${h1Raw.length} H1 candles. Aggregating...`);
-    if (onProgress) onProgress({ step: 'aggregating', pct: 15 });
+    if (onProgress) onProgress(15, 'Aggregating timeframes…');
 
     const h1 = h1Raw;
     const h2 = this._aggregate(h1, 2);
@@ -311,6 +314,9 @@ class Backtester {
     const trades  = [];
     let tradeEndTime = null;
 
+    // Diagnostic skip counters — returned in report for debugging
+    const skips = { inTrade: 0, regime: 0, bias: 0, location: 0, entryType: 0, confluence: 0, levels: 0, session: 0 };
+
     // Pointer-based sliding window (O(n) instead of O(n²))
     let h1End = 0, h2End = 0, d1End = 0, w1End = 0;
     const tsOf = (arr, j) => new Date(arr[j].datetime).getTime();
@@ -323,7 +329,7 @@ class Backtester {
       const h4Ms = h4Ts.getTime();
 
       // Skip while in an active trade
-      if (tradeEndTime && h4Ms <= tradeEndTime) continue;
+      if (tradeEndTime && h4Ms <= tradeEndTime) { skips.inTrade++; continue; }
 
       // Advance pointers to include all candles up to current H4 bar
       while (h1End < h1.length - 1 && tsOf(h1, h1End + 1) <= h4Ms) h1End++;
@@ -337,8 +343,8 @@ class Backtester {
       const d1Slice = d1.slice(Math.max(0, d1End - 99), d1End + 1);
       const w1Slice = w1.slice(Math.max(0, w1End - 51), w1End + 1);
 
-      const signal = this._analyzeSnapshot(symbol, h4Slice, h2Slice, h1Slice, d1Slice, w1Slice, h4Ts);
-      if (!signal) continue;
+      const { signal, skipReason } = this._analyzeSnapshot(symbol, h4Slice, h2Slice, h1Slice, d1Slice, w1Slice, h4Ts);
+      if (!signal) { if (skipReason) skips[skipReason] = (skips[skipReason] || 0) + 1; continue; }
 
       signals.push(signal);
 
@@ -370,21 +376,22 @@ class Backtester {
 
       if (onProgress) {
         const pct = Math.round(15 + ((i - H4_WARMUP) / total) * 75);
-        onProgress({ step: 'replaying', pct, bar: i - H4_WARMUP, total });
+        onProgress(pct, `Replaying bar ${i - H4_WARMUP}/${total} — ${signals.length} signals so far`);
       }
     }
 
-    if (onProgress) onProgress({ step: 'building_report', pct: 95 });
-    return this._buildReport(symbol, yearsBack, signals, trades, h4.length);
+    console.log(`[Backtest] ${symbol} — skip counts:`, skips);
+    if (onProgress) onProgress(95, 'Building report…');
+    return this._buildReport(symbol, yearsBack, signals, trades, h4.length, skips);
   }
 
   // ── COMPREHENSIVE REPORT ────────────────────────────────────────────────
 
-  _buildReport(symbol, yearsBack, signals, trades, totalBars) {
-    const wins    = trades.filter(t => t.r > 0);
-    const losses  = trades.filter(t => t.r <= 0);
-    const totalR  = parseFloat(trades.reduce((s, t) => s + t.r, 0).toFixed(2));
-    const pct     = (w, t) => t > 0 ? Math.round(w / t * 100) + '%' : 'N/A';
+  _buildReport(symbol, yearsBack, signals, trades, totalBars, skips = {}) {
+    const wins   = trades.filter(t => t.r > 0);
+    const losses = trades.filter(t => t.r <= 0);
+    const totalR = parseFloat(trades.reduce((s, t) => s + t.r, 0).toFixed(2));
+    const winPct = (w, t) => t > 0 ? parseFloat((w / t * 100).toFixed(1)) : 0;
 
     // Consecutive streaks
     let maxWin = 0, maxLoss = 0, curW = 0, curL = 0;
@@ -393,50 +400,56 @@ class Backtester {
       else         { curL++; curW = 0; maxLoss = Math.max(maxLoss, curL); }
     }
 
-    // Group helper
+    // Profit factor
+    const grossWin  = wins.reduce((s, t) => s + t.r, 0);
+    const grossLoss = Math.abs(losses.reduce((s, t) => s + t.r, 0));
+    const profitFactor = grossLoss > 0 ? parseFloat((grossWin / grossLoss).toFixed(2)) : (grossWin > 0 ? 999 : 0);
+
+    // Group helper — all values numeric
     const grp = (field) => {
       const m = {};
       for (const t of trades) {
         const k = t[field] || 'UNKNOWN';
-        if (!m[k]) m[k] = { total: 0, wins: 0, totalR: 0 };
-        m[k].total++; m[k].totalR += t.r;
+        if (!m[k]) m[k] = { trades: 0, wins: 0, totalR: 0 };
+        m[k].trades++; m[k].totalR += t.r;
         if (t.r > 0) m[k].wins++;
       }
       return Object.fromEntries(Object.entries(m).map(([k, v]) => [k, {
-        total:   v.total,
+        trades:  v.trades,
         wins:    v.wins,
-        winRate: pct(v.wins, v.total),
+        winRate: winPct(v.wins, v.trades),
         totalR:  parseFloat(v.totalR.toFixed(2)),
       }]));
     };
 
-    // Best performers
     const entryGrp   = grp('entryType');
     const tierGrp    = grp('tier');
     const sessionGrp = grp('session');
     const monthGrp   = grp('month');
 
     const bestOf = (obj) => Object.entries(obj)
-      .filter(([, v]) => v.total >= 3)
-      .sort((a, b) => (b[1].wins / b[1].total) - (a[1].wins / a[1].total))[0]?.[0] || 'N/A';
+      .filter(([, v]) => v.trades >= 3)
+      .sort((a, b) => (b[1].wins / b[1].trades) - (a[1].wins / a[1].trades))[0]?.[0] || 'N/A';
 
     return {
       symbol, yearsBack,
       generatedAt:  new Date().toISOString(),
       dataPoints:   totalBars,
+      skipCounts:   skips,
       summary: {
-        totalTrades:      trades.length,
-        totalSignals:     signals.length,
-        winRate:          pct(wins.length, trades.length),
-        winsCount:        wins.length,
-        lossCount:        losses.length,
+        totalTrades:           trades.length,
+        totalSignals:          signals.length,
+        winRate:               winPct(wins.length, trades.length),  // numeric %
+        winsCount:             wins.length,
+        lossCount:             losses.length,
         totalR,
-        avgR:             trades.length > 0 ? parseFloat((totalR / trades.length).toFixed(2)) : 0,
-        largestWin:       wins.length  > 0 ? `+${Math.max(...wins.map(t => t.r)).toFixed(2)}R`  : 'N/A',
-        largestLoss:      losses.length > 0 ? `${Math.min(...losses.map(t => t.r)).toFixed(2)}R` : 'N/A',
-        maxConsecWins:    maxWin,
-        maxConsecLosses:  maxLoss,
-        signalRate:       `${(signals.length / totalBars * 100).toFixed(1)}%`,
+        avgR:                  trades.length > 0 ? parseFloat((totalR / trades.length).toFixed(2)) : 0,
+        largestWin:            wins.length  > 0 ? parseFloat(Math.max(...wins.map(t => t.r)).toFixed(2))  : 0,
+        largestLoss:           losses.length > 0 ? parseFloat(Math.min(...losses.map(t => t.r)).toFixed(2)) : 0,
+        maxConsecutiveWins:    maxWin,
+        maxConsecutiveLosses:  maxLoss,
+        profitFactor,
+        signalRate:            parseFloat((signals.length / Math.max(totalBars, 1) * 100).toFixed(2)),
       },
       best: {
         entryType: bestOf(entryGrp),
@@ -448,10 +461,14 @@ class Backtester {
       bySession:   sessionGrp,
       byMonth:     monthGrp,
       recentTrades: trades.slice(-30).map(t => ({
-        entry: t.entryTime?.slice(0, 16),
-        exit:  t.exitTime?.slice ?  t.exitTime.slice(0, 16) : t.exitTime,
-        dir:   t.direction, type: t.entryType, tier: t.tier,
-        r:     t.r, win: t.win, reason: t.exitReason,
+        date:       t.entryTime?.slice(0, 16),
+        exitTime:   t.exitTime?.slice ? t.exitTime.slice(0, 16) : t.exitTime,
+        direction:  t.direction,
+        entryType:  t.entryType,
+        tier:       t.tier,
+        pnlR:       t.r,
+        outcome:    t.r > 0 ? 'WIN' : 'LOSS',
+        exitReason: t.exitReason,
       })),
     };
   }

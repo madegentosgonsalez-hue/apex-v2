@@ -746,19 +746,20 @@ function renderBacktestReport(report, symbol) {
   const s = report.summary || {};
   $('bt-report-title').textContent = `${symbol} — 1 Year Backtest`;
 
-  // Summary grid
-  const wr   = s.winRate ?? 0;
-  const tr   = s.totalR  ?? 0;
-  const avgR = s.avgR ?? 0;
+  // Summary grid — all values are now numeric
+  const wr   = s.winRate  ?? 0;
+  const tr   = s.totalR   ?? 0;
+  const avgR = s.avgR     ?? 0;
+  const pf   = s.profitFactor ?? 0;
   $('bt-summary-grid').innerHTML = [
-    ['Total Trades',  s.totalTrades ?? 0, ''],
-    ['Win Rate',      wr + '%', wr >= 50 ? 'pos' : 'neg'],
-    ['Total R',       (tr >= 0 ? '+' : '') + fmt(tr, 2) + 'R', tr >= 0 ? 'pos' : 'neg'],
-    ['Avg R/trade',   (avgR >= 0 ? '+' : '') + fmt(avgR, 2) + 'R', avgR >= 0 ? 'pos' : 'neg'],
-    ['Largest Win',   '+' + fmt(s.largestWin, 2) + 'R', 'pos'],
-    ['Largest Loss',  fmt(s.largestLoss, 2) + 'R', 'neg'],
-    ['Max Consec L',  s.maxConsecutiveLosses ?? 0, ''],
-    ['Profit Factor', fmt(s.profitFactor, 2), (s.profitFactor ?? 0) >= 1 ? 'pos' : 'neg'],
+    ['Total Trades',    s.totalTrades ?? 0,                                  ''],
+    ['Win Rate',        wr + '%',                                             wr >= 50 ? 'pos' : 'neg'],
+    ['Total R',         (tr  >= 0 ? '+' : '') + fmt(tr,  2) + 'R',           tr  >= 0 ? 'pos' : 'neg'],
+    ['Avg R/trade',     (avgR >= 0 ? '+' : '') + fmt(avgR, 2) + 'R',         avgR >= 0 ? 'pos' : 'neg'],
+    ['Largest Win',     s.largestWin  > 0 ? '+' + fmt(s.largestWin,  2) + 'R' : '—', 'pos'],
+    ['Largest Loss',    s.largestLoss < 0 ? fmt(s.largestLoss, 2) + 'R' : '—',        'neg'],
+    ['Max Consec L',    s.maxConsecutiveLosses ?? 0,                          ''],
+    ['Profit Factor',   fmt(pf, 2),                                           pf >= 1 ? 'pos' : 'neg'],
   ].map(([label, val, cls]) =>
     `<div class="bt-stat-card">
        <div class="bt-stat-label">${label}</div>
@@ -766,32 +767,37 @@ function renderBacktestReport(report, symbol) {
      </div>`
   ).join('');
 
-  // By entry type
-  const byEntry = report.byEntryType || {};
-  $('bt-by-entry').innerHTML = Object.entries(byEntry).map(([k, v]) =>
-    `<div class="bt-row">
-       <span class="bt-row-label">${k}</span>
-       <span class="bt-row-val ${v.totalR >= 0 ? 'pos' : 'neg'}">${v.trades}T · ${v.winRate}% WR · ${v.totalR >= 0 ? '+' : ''}${fmt(v.totalR,1)}R</span>
-     </div>`
-  ).join('') || '<div class="bt-row"><span class="bt-row-label" style="color:#555">No data</span></div>';
+  // Skip diagnostics panel (only shown when >0 total bars scanned)
+  const sk = report.skipCounts || {};
+  const skTotal = Object.values(sk).reduce((a, b) => a + b, 0);
+  if (skTotal > 0) {
+    const diagHtml = `
+      <div class="bt-section" style="border-color:#333">
+        <h4>Why bars were skipped</h4>
+        ${Object.entries(sk).filter(([,v])=>v>0).map(([k,v])=>`
+          <div class="bt-row">
+            <span class="bt-row-label">${k}</span>
+            <span class="bt-row-val">${v.toLocaleString()}</span>
+          </div>`).join('')}
+      </div>`;
+    const sectionsEl = document.querySelector('.bt-sections');
+    if (sectionsEl) sectionsEl.insertAdjacentHTML('beforeend', diagHtml);
+  }
 
-  // By tier
-  const byTier = report.byTier || {};
-  $('bt-by-tier').innerHTML = Object.entries(byTier).map(([k, v]) =>
-    `<div class="bt-row">
-       <span class="bt-row-label">${k}</span>
-       <span class="bt-row-val ${v.totalR >= 0 ? 'pos' : 'neg'}">${v.trades}T · ${v.winRate}% WR · ${v.totalR >= 0 ? '+' : ''}${fmt(v.totalR,1)}R</span>
-     </div>`
-  ).join('') || '<div class="bt-row"><span class="bt-row-label" style="color:#555">No data</span></div>';
+  // Group renderer helper
+  const renderGroup = (obj, containerId) => {
+    const html = Object.entries(obj).map(([k, v]) =>
+      `<div class="bt-row">
+         <span class="bt-row-label">${k}</span>
+         <span class="bt-row-val ${v.totalR >= 0 ? 'pos' : 'neg'}">${v.trades}T · ${v.winRate}% · ${v.totalR >= 0 ? '+' : ''}${fmt(v.totalR,1)}R</span>
+       </div>`
+    ).join('') || '<div class="bt-row"><span class="bt-row-label" style="color:#555">No data</span></div>';
+    $(containerId).innerHTML = html;
+  };
 
-  // By session
-  const bySess = report.bySession || {};
-  $('bt-by-session').innerHTML = Object.entries(bySess).map(([k, v]) =>
-    `<div class="bt-row">
-       <span class="bt-row-label">${k}</span>
-       <span class="bt-row-val ${v.totalR >= 0 ? 'pos' : 'neg'}">${v.trades}T · ${v.winRate}% WR · ${v.totalR >= 0 ? '+' : ''}${fmt(v.totalR,1)}R</span>
-     </div>`
-  ).join('') || '<div class="bt-row"><span class="bt-row-label" style="color:#555">No data</span></div>';
+  renderGroup(report.byEntryType || {}, 'bt-by-entry');
+  renderGroup(report.byTier      || {}, 'bt-by-tier');
+  renderGroup(report.bySession   || {}, 'bt-by-session');
 
   // Recent trades table
   const trades = (report.recentTrades || []).slice(0, 30);
@@ -801,7 +807,7 @@ function renderBacktestReport(report, symbol) {
       <td>${t.direction || '—'}</td>
       <td>${t.entryType || '—'}</td>
       <td>${t.tier || '—'}</td>
-      <td class="${t.outcome === 'WIN' ? 'badge-win' : t.outcome === 'LOSS' ? 'badge-loss' : ''}">${t.outcome || '—'}</td>
+      <td class="${t.outcome === 'WIN' ? 'badge-win' : 'badge-loss'}">${t.outcome || '—'}</td>
       <td>${t.pnlR != null ? (t.pnlR >= 0 ? '+' : '') + fmt(t.pnlR, 2) + 'R' : '—'}</td>
       <td>${t.exitReason || '—'}</td>
     </tr>`).join('') || '<tr><td colspan="7" class="empty">No trades</td></tr>';
