@@ -135,8 +135,9 @@ class Brain1 {
     //   OPPOSITE = daily fighting weekly = skip
     if (daily !== 'NEUTRAL' && daily !== weekly) return { direction: 'NEUTRAL', weekly, daily, h4, h2 };
 
-    // Rule 3: H4 must confirm weekly direction — this is the execution trigger
-    if (h4 !== weekly) return { direction: 'NEUTRAL', weekly, daily, h4, h2 };
+    // Rule 3: H4 must not oppose weekly — NEUTRAL (consolidating) is allowed
+    // H4=NEUTRAL means H4 is in a range within the weekly trend = valid pullback setup
+    if (h4 !== 'NEUTRAL' && h4 !== weekly) return { direction: 'NEUTRAL', weekly, daily, h4, h2 };
 
     const h2Conflicts = h2 !== 'NEUTRAL' && h2 !== weekly;
     const isPullback  = daily === 'NEUTRAL';
@@ -350,8 +351,10 @@ class Brain1 {
                this._candlePattern(mkt.h1,  dir) ||
                this._candlePattern(mkt.h4,  dir);
 
-    // Factor 6: Pair-aware intermarket
-    f.intermarket = this._intermarketCheck(mkt.intermarket, dir, symbol);
+    // Factor 6: Pair-aware intermarket — benefit of doubt when data unavailable (e.g. backtest)
+    f.intermarket = (!mkt.intermarket?.dxyTrend || mkt.intermarket.dxyTrend === 'UNKNOWN')
+      ? true
+      : this._intermarketCheck(mkt.intermarket, dir, symbol);
 
     // Factor 7: AMD Phase — Manipulation (sweep) or Distribution (sweep + MSB) = +1
     f.amdPhase = this._amdPhase(mkt, dir);
