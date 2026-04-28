@@ -123,35 +123,60 @@ class DataService {
     });
   }
 
-  // ── 12DATA FETCH ──────────────────────────────────────────────────────────
+  // ── 12DATA FETCH — 1 API call, all indicators computed locally ────────────
   async _twelveGet(symbol, interval, size) {
-    const sym = this._toTD(symbol);
+    const sym  = this._toTD(symbol);
     const intv = this._toTDInterval(interval);
-    const base = `${this.twelveBase}`;
-    const key  = this.twelveKey;
 
-    const [ts, rsi, atr, adx, e21, e50] = await Promise.all([
-      this._fetch(`${base}/time_series?symbol=${sym}&interval=${intv}&outputsize=${size}&apikey=${key}`),
-      this._fetch(`${base}/rsi?symbol=${sym}&interval=${intv}&time_period=14&apikey=${key}`),
-      this._fetch(`${base}/atr?symbol=${sym}&interval=${intv}&time_period=14&apikey=${key}`),
-      this._fetch(`${base}/adx?symbol=${sym}&interval=${intv}&time_period=14&apikey=${key}`),
-      this._fetch(`${base}/ema?symbol=${sym}&interval=${intv}&time_period=21&apikey=${key}`),
-      this._fetch(`${base}/ema?symbol=${sym}&interval=${intv}&time_period=50&apikey=${key}`),
-    ]);
+    // Single time_series call — no 6-way parallel fan-out that hits rate limits
+    const ts = await this._fetch(
+      `${this.twelveBase}/time_series?symbol=${encodeURIComponent(sym)}&interval=${intv}&outputsize=${size}&apikey=${this.twelveKey}&format=JSON`
+    );
 
-    const candles = (ts.values || []).reverse().map(c => ({
-      open: parseFloat(c.open), high: parseFloat(c.high),
-      low:  parseFloat(c.low),  close: parseFloat(c.close),
+    if (ts.status === 'error' || !Array.isArray(ts.values)) {
+      throw new Error(ts.message || `Twelve Data: no values for ${symbol} ${interval}`);
+    }
+
+    // API returns newest-first; reverse to chronological order
+    const candles = ts.values.slice().reverse().map(c => ({
+      open:   parseFloat(c.open),
+      high:   parseFloat(c.high),
+      low:    parseFloat(c.low),
+      close:  parseFloat(c.close),
       volume: parseFloat(c.volume || 0),
     }));
 
+    // Compute all indicators locally — no extra API calls needed
+    const closes   = candles.map(c => c.close);
+    const ema21Arr = this._ema(closes, 21);
+    const ema50Arr = this._ema(closes, 50);
+    const rsiArr   = this._rsi(closes, 14);
+    const atrArr   = this._atr(candles, 14);
+
     return this._buildCandleObj(candles, {
-      ema21: parseFloat(e21.values?.[0]?.ema || 0),
-      ema50: parseFloat(e50.values?.[0]?.ema || 0),
-      rsi:   parseFloat(rsi.values?.[0]?.rsi || 50),
-      atr:   parseFloat(atr.values?.[0]?.atr || 0),
-      adx:   parseFloat(adx.values?.[0]?.adx || 20),
+      ema21: ema21Arr[ema21Arr.length - 1],
+      ema50: ema50Arr[ema50Arr.length - 1],
+      rsi:   rsiArr[rsiArr.length - 1],
+      atr:   atrArr[atrArr.length - 1],
+      adx:   this._adx(candles, 14),
     });
+  }
+
+  _adx(candles, period = 14) {
+    if (candles.length < period + 1) return 20;
+    let pdm = 0, mdm = 0, tr = 0;
+    const sl = candles.slice(-(period + 1));
+    for (let i = 1; i < sl.length; i++) {
+      const up = sl[i].high - sl[i - 1].high;
+      const dn = sl[i - 1].low  - sl[i].low;
+      if (up > dn && up > 0) pdm += up;
+      if (dn > up && dn > 0) mdm += dn;
+      const h = sl[i].high, lo = sl[i].low, pc = sl[i - 1].close;
+      tr += Math.max(h - lo, Math.abs(h - pc), Math.abs(lo - pc));
+    }
+    if (!tr) return 20;
+    const pdi = (pdm / tr) * 100, mdi = (mdm / tr) * 100;
+    return Math.abs(pdi - mdi) / (pdi + mdi + 1e-9) * 100;
   }
 
   // ── MOCK CANDLE GENERATOR ─────────────────────────────────────────────────

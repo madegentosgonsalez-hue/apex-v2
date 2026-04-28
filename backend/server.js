@@ -635,10 +635,26 @@ app.get('/api/debug/scan/:symbol', async (req, res) => {
       msg: `${regime.label} | ADX: ${mkt.h4?.adx?.toFixed(1)} | ATR ratio: ${regime.atrRatio?.toFixed(2) ?? 'N/A'}`,
     });
 
+    // Detailed bias breakdown — expose exactly why each TF is NEUTRAL
+    const diagBias = (tf, label, minSwings) => {
+      if (!tf?.closes?.length) return `${label}: NO_DATA`;
+      const price  = tf.closes[tf.closes.length - 1];
+      const highs  = tf.swingHighs?.slice(-(minSwings + 1)) || [];
+      const lows   = tf.swingLows?.slice(-(minSwings + 1))  || [];
+      const hasSwings = highs.length >= minSwings && lows.length >= minSwings;
+      const lh = highs.slice(-2), ll = lows.slice(-2);
+      const isHHHL = hasSwings && lh.length===2 && ll.length===2 && lh[1]>lh[0] && ll[1]>ll[0];
+      const isLHLL = hasSwings && lh.length===2 && ll.length===2 && lh[1]<lh[0] && ll[1]<ll[0];
+      const aboveEMAs = tf.ema21 && tf.ema50 && price > tf.ema21 && price > tf.ema50 && tf.ema21 > tf.ema50;
+      const belowEMAs = tf.ema21 && tf.ema50 && price < tf.ema21 && price < tf.ema50 && tf.ema21 < tf.ema50;
+      const result = b._bias(tf, minSwings);
+      return `${label}=${result} [swH:${tf.swingHighs?.length||0} swL:${tf.swingLows?.length||0} need:${minSwings} | HH:${isHHHL} LL:${isLHLL} | p:${price?.toFixed(4)} ema21:${tf.ema21?.toFixed(4)} ema50:${tf.ema50?.toFixed(4)} | aboveEMA:${aboveEMAs} belowEMA:${belowEMAs}]`;
+    };
+
     const bias = b._topDownBias(mkt);
     steps.push({
       step: 'TOP_DOWN_BIAS', ok: bias.direction !== 'NEUTRAL',
-      msg: `Weekly=${bias.weekly} Daily=${bias.daily} H4=${bias.h4} H2=${bias.h2} → ${bias.direction}${bias.h2Conflicts ? ' ⚠ H2 conflict' : ''}`,
+      msg: `→ ${bias.direction}${bias.h2Conflicts ? ' ⚠H2 conflict' : ''}\n  ${diagBias(mkt.weekly,'W',5)}\n  ${diagBias(mkt.daily,'D',4)}\n  ${diagBias(mkt.h4,'H4',3)}\n  ${diagBias(mkt.h2,'H2',3)}`,
     });
 
     if (!regime.signalAllowed || bias.direction === 'NEUTRAL') {
