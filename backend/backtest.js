@@ -29,7 +29,11 @@ class Backtester {
   // ── INDICATOR MATH ──────────────────────────────────────────────────────
 
   _ema(closes, period) {
-    if (closes.length < period) return null;
+    if (!closes.length) return null;
+    if (closes.length < period) {
+      // Not enough bars for true EMA — SMA approximation so nulls don't block bias
+      return closes.reduce((a, b) => a + b, 0) / closes.length;
+    }
     const k = 2 / (period + 1);
     let v = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
     for (let i = period; i < closes.length; i++) v = closes[i] * k + v * (1 - k);
@@ -321,7 +325,7 @@ class Backtester {
     let h1End = 0, h2End = 0, d1End = 0, w1End = 0;
     const tsOf = (arr, j) => new Date(arr[j].datetime).getTime();
 
-    const H4_WARMUP = 100;
+    const H4_WARMUP = 200; // 200 H4 bars = ~50 days, ensures daily ema50 has enough bars
     const total = h4.length - H4_WARMUP - 1;
 
     for (let i = H4_WARMUP; i < h4.length - 1; i++) {
