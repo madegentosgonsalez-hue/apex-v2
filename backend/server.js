@@ -2,7 +2,9 @@
 // APEX SIGNAL SYSTEM — MAIN SERVER v1.0
 // ═══════════════════════════════════════════════════════════════════════════
 
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
 const express = require('express');
 const cors    = require('cors');
 const cron    = require('node-cron');
@@ -23,6 +25,9 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
+app.use(express.static(frontendDist));
 
 // ─── BOOT ─────────────────────────────────────────────────────────────────────
 async function boot() {
@@ -50,7 +55,7 @@ async function boot() {
   // Notifications
   const telegram = new TelegramNotifier({
     botToken: process.env.TELEGRAM_BOT_TOKEN,
-    chatId:   process.env.TELEGRAM_CHAT_ID,
+    chatId:   process.env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_GROUP_ID,
   });
   const whatsapp = new WhatsAppNotifier({
     accountSid: process.env.TWILIO_ACCOUNT_SID,
@@ -72,13 +77,73 @@ async function boot() {
   // Learning engine
   const learning = new LearningEngine({ aiAnalyst: ai, db, notifier });
   const backtestJobs = new Map();
+  const livePolicyName = process.env.LIVE_POLICY || process.env.RESEARCH_POLICY || 'target_growth_v6';
+  const livePolicy = getPairPolicy(livePolicyName);
+  const livePairs = (process.env.LIVE_PAIRS || 'EURUSD,USDCHF,GBPJPY,EURJPY,XAUUSD')
+    .split(',')
+    .map((p) => p.trim().toUpperCase())
+    .filter(Boolean);
+
+  async function syncLivePairs() {
+    if (String(process.env.SYNC_LIVE_PAIRS || 'true').toLowerCase() === 'false') return;
+    const pairs = await db.getAllPairs();
+    const known = new Set(pairs.map((p) => p.symbol));
+    for (const pair of pairs) {
+      const shouldBeActive = livePairs.includes(pair.symbol);
+      if (known.has(pair.symbol) && pair.active !== shouldBeActive) {
+        await db.updatePairStatus(pair.symbol, shouldBeActive).catch(() => {});
+      }
+    }
+  }
+
+  function policyDecision(signal) {
+    const policy = livePolicy[signal.symbol];
+    if (!policy) return { allowed: true };
+
+    if (policy.disabled) return { allowed: false, reason: `${signal.symbol} disabled by ${livePolicyName}` };
+    if (policy.sessions && !policy.sessions.includes(signal.session)) return { allowed: false, reason: `${signal.symbol} session ${signal.session} blocked` };
+    if (Array.isArray(policy.blockedRegimes) && policy.blockedRegimes.includes(signal.regime)) return { allowed: false, reason: `${signal.symbol} regime ${signal.regime} blocked` };
+    if (Array.isArray(policy.allowedEntryTypes) && policy.allowedEntryTypes.length && !policy.allowedEntryTypes.includes(signal.entry_type)) return { allowed: false, reason: `${signal.symbol} entry ${signal.entry_type} blocked` };
+    if (Array.isArray(policy.blockedDirections) && policy.blockedDirections.includes(signal.direction)) return { allowed: false, reason: `${signal.symbol} direction ${signal.direction} blocked` };
+    if (Array.isArray(policy.blockedHoursUTC) && policy.blockedHoursUTC.includes(new Date().getUTCHours())) return { allowed: false, reason: `${signal.symbol} UTC hour blocked` };
+    if (policy.blockedLevelRegimes && Array.isArray(policy.blockedLevelRegimes[signal.level_type]) && policy.blockedLevelRegimes[signal.level_type].includes(signal.regime)) {
+      return { allowed: false, reason: `${signal.symbol} ${signal.level_type}/${signal.regime} blocked` };
+    }
+    return { allowed: true };
+  }
+
+  function timeStatus() {
+    const now = new Date();
+    return {
+      iso: now.toISOString(),
+      utc: now.toLocaleString('en-AU', { timeZone: 'UTC', hour12: false }),
+      sydney: now.toLocaleString('en-AU', { timeZone: 'Australia/Sydney', hour12: false }),
+      timezone: 'Australia/Sydney',
+    };
+  }
+
+  await syncLivePairs();
 
   // ─── SIGNAL PIPELINE ──────────────────────────────────────────────────────
   async function processPipeline(symbol) {
     const scan = await brain1.scan(symbol);
-    if (!scan.signal) return;
+    if (!scan.signal) return { sent: false, symbol, stage: 'brain1', reason: scan.reason || 'No signal' };
 
     const { signal } = scan;
+    signal.detected_at = new Date().toISOString();
+    signal.live_policy = livePolicyName;
+
+    const liveGate = policyDecision(signal);
+    if (!liveGate.allowed) {
+      signal.signal_type = 'NO_TRADE';
+      signal.ai_decision = 'REJECT';
+      signal.ai_conviction = 0;
+      signal.ai_reasoning = `Live policy ${livePolicyName}: ${liveGate.reason}`;
+      signal.ai_risk_flags = ['LIVE_POLICY_FILTER'];
+      await db.saveSignal(signal).catch(() => {});
+      console.log(`[Pipeline] ${symbol}: live policy skipped - ${liveGate.reason}`);
+      return { sent: false, symbol, stage: 'policy', reason: liveGate.reason, signal };
+    }
 
     // Historical context for AI
     const hist = await db.getHistoricalPerformance(symbol);
@@ -154,27 +219,105 @@ async function boot() {
     // REJECT → stop here after saving for learning records
     if (sigType === 'NO_TRADE') {
       console.log(`[Pipeline] ${symbol}: AI rejected — ${aiResp.reasoning?.slice(0,60)}`);
-      return;
+      return { sent: false, symbol, stage: 'ai', reason: aiResp.reasoning, signal: saved, ai: aiResp };
     }
 
     // Send notifications using saved object (has real id)
     if (['BUY','SELL'].includes(sigType)) {
-      await notifier.sendSignal(saved, aiResp);
+      const notify = await notifier.sendSignal(saved, aiResp);
+      return { sent: notify.sent, symbol, stage: 'signal', type: sigType, signal: saved, ai: aiResp, notify };
     } else if (sigType === 'READY') {
-      await notifier.sendReadyAlert(saved);
+      const notify = await notifier.sendReadyAlert(saved);
+      return { sent: notify.sent, symbol, stage: 'ready', type: sigType, signal: saved, ai: aiResp, notify };
     }
+
+    return { sent: false, symbol, stage: 'wait', type: sigType, signal: saved, ai: aiResp };
   }
 
   // ─── ROUTES ───────────────────────────────────────────────────────────────
 
   app.get('/health', (req, res) => res.json({
     status:  'ONLINE',
-    time:    new Date(),
-    version: '1.0.0',
+    time:    timeStatus(),
+    version: '3.0.0-demo',
     mode:    process.env.PAPER_TRADE === 'false' ? 'LIVE' : 'PAPER',
     ai:      ai.mockMode ? 'MOCK' : 'LIVE',
     telegram: telegram.active ? 'CONNECTED' : 'NOT_CONFIGURED',
+    marketData: process.env.MARKET_DATA_PROVIDER || 'auto',
+    livePolicy: livePolicyName,
+    livePairs,
+    uptimeSec: Math.round(process.uptime()),
   }));
+
+  app.get('/api/status', async (req, res) => {
+    try {
+      const pairs = await db.getAllPairs();
+      res.json({
+        success: true,
+        status: 'ONLINE',
+        time: timeStatus(),
+        mode: process.env.PAPER_TRADE === 'false' ? 'LIVE' : 'PAPER',
+        ai: ai.mockMode ? 'MOCK' : 'LIVE',
+        telegram: telegram.active ? 'CONNECTED' : 'NOT_CONFIGURED',
+        marketDataProvider: process.env.MARKET_DATA_PROVIDER || 'auto',
+        livePolicy: livePolicyName,
+        livePairs,
+        activePairs: pairs.filter((p) => p.active).map((p) => p.symbol),
+        uptimeSec: Math.round(process.uptime()),
+      });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  });
+
+  app.get('/api/market/:symbol', async (req, res) => {
+    try {
+      const symbol = req.params.symbol.toUpperCase();
+      const price = await data.getCurrentPrice(symbol);
+      const h4 = await data.getCandles(symbol, '4h', 80);
+      res.json({
+        success: true,
+        symbol,
+        price,
+        live: price.source !== 'mock',
+        provider: price.source,
+        time: timeStatus(),
+        context: {
+          ema21: h4.ema21,
+          ema50: h4.ema50,
+          rsi: h4.rsi,
+          atr: h4.atr,
+          adx: h4.adx,
+        },
+      });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  });
+
+  app.post('/api/telegram/test', async (req, res) => {
+    try {
+      const symbol = String(req.body?.symbol || req.query?.symbol || 'EURUSD').toUpperCase();
+      const price = await data.getCurrentPrice(symbol);
+      const now = timeStatus();
+      const msg = [
+        '<b>APEX DEMO CHECK</b>',
+        'System is online and Telegram is connected.',
+        '',
+        `<b>${symbol}</b> price: ${price.price}`,
+        `Data source: ${price.source}`,
+        `UTC: ${now.utc}`,
+        `Sydney: ${now.sydney}`,
+        `Policy: ${livePolicyName}`,
+        `Mode: ${process.env.PAPER_TRADE === 'false' ? 'LIVE' : 'PAPER'}`,
+      ].join('\n');
+      const sent = await telegram.send(msg, 'DEMO_CHECK');
+      res.json({ success: sent.sent, sent, symbol, price, time: now });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  });
+
+  app.post('/api/pipeline/:symbol', async (req, res) => {
+    try {
+      const result = await processPipeline(req.params.symbol.toUpperCase());
+      res.json({ success: true, result, time: timeStatus() });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  });
 
   app.get('/api/pairs', async (req, res) => {
     try { res.json({ success: true, pairs: await db.getAllPairs() }); }
@@ -373,6 +516,13 @@ async function boot() {
   });
 
   // ─── LISTEN ───────────────────────────────────────────────────────────────
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/webhook') || req.path === '/health') return next();
+    res.sendFile(path.join(frontendDist, 'index.html'), (err) => {
+      if (err) res.status(404).send('APEX dashboard has not been built yet. Run npm run build in frontend.');
+    });
+  });
+
   app.listen(PORT, () => {
     console.log(`✅ APEX Server running on port ${PORT}`);
     console.log('');

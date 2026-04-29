@@ -1,5 +1,7 @@
 # Dependencies
+node_modules/
 backend/node_modules/
+frontend/node_modules/
 
 # Secrets
 backend/.env
@@ -15,6 +17,7 @@ logs/
 Thumbs.db
 
 # Runtime artifacts
+frontend/dist/
 backend/tmp/
 backend/cache/
 backend/research/cache/

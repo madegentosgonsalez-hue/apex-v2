@@ -1,0 +1,15 @@
+{
+  "name": "apex-v3",
+  "version": "3.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "build": "npm --prefix frontend run build",
+    "start": "node backend/server.js",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

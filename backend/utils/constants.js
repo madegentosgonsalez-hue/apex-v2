@@ -300,10 +300,10 @@ const PAIRS = {
   USDJPY: { market: 'FOREX',   active: false, tvSymbol: 'FX:USDJPY',          pipSize: 0.01,   session: 'FOREX'   },
   AUDUSD: { market: 'FOREX',   active: false, tvSymbol: 'FX:AUDUSD',          pipSize: 0.0001, session: 'FOREX'   },
   USDCAD: { market: 'FOREX',   active: false, tvSymbol: 'FX:USDCAD',          pipSize: 0.0001, session: 'FOREX'   },
-  GBPJPY: { market: 'FOREX',   active: false, tvSymbol: 'FX:GBPJPY',          pipSize: 0.01,   session: 'FOREX'   },
-  EURJPY: { market: 'FOREX',   active: false, tvSymbol: 'FX:EURJPY',          pipSize: 0.01,   session: 'FOREX'   },
+  GBPJPY: { market: 'FOREX',   active: true,  tvSymbol: 'FX:GBPJPY',          pipSize: 0.01,   session: 'FOREX'   },
+  EURJPY: { market: 'FOREX',   active: true,  tvSymbol: 'FX:EURJPY',          pipSize: 0.01,   session: 'FOREX'   },
   NZDUSD: { market: 'FOREX',   active: false, tvSymbol: 'FX:NZDUSD',          pipSize: 0.0001, session: 'FOREX'   },
-  USDCHF: { market: 'FOREX',   active: false, tvSymbol: 'FX:USDCHF',          pipSize: 0.0001, session: 'FOREX'   },
+  USDCHF: { market: 'FOREX',   active: true,  tvSymbol: 'FX:USDCHF',          pipSize: 0.0001, session: 'FOREX'   },
   // ── CRYPTO ──
   BTCUSD: { market: 'CRYPTO',  active: false, tvSymbol: 'BINANCE:BTCUSDT',    pipSize: 1,      session: 'CRYPTO'  },
   ETHUSD: { market: 'CRYPTO',  active: false, tvSymbol: 'BINANCE:ETHUSDT',    pipSize: 0.1,    session: 'CRYPTO'  },

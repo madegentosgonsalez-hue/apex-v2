@@ -715,10 +715,11 @@ class Brain1 {
     const utcH = new Date().getUTCHours();
     if (sessionType === 'CRYPTO') return { active: true };
     if (sessionType === 'FOREX') {
+      const asianOpen = utcH >= 0 && utcH < 8;
       const londonOpen = utcH >= 8  && utcH < 16;
       const nyOpen     = utcH >= 13 && utcH < 21;
-      const ok = londonOpen || nyOpen;
-      return ok ? { active: true } : { active: false, reason: 'Outside London/NY hours (UTC 08-16, 13-21)' };
+      const ok = asianOpen || londonOpen || nyOpen;
+      return ok ? { active: true } : { active: false, reason: 'Outside Asian/London/NY hours (UTC 00-21)' };
     }
     if (sessionType === 'STOCKS') {
       const ok = utcH >= 15 && utcH < 21; // NYSE 09:30-16:00 EST = 14:30-21:00 UTC, skip first 30min
@@ -734,7 +735,7 @@ class Brain1 {
 
   _currentSession() {
     const h = new Date().getUTCHours();
-    if (h >= 13 && h < 16) return 'LONDON_NY_OVERLAP';
+    if (h >= 13 && h < 16) return 'OVERLAP';
     if (h >= 8  && h < 13) return 'LONDON';
     if (h >= 16 && h < 21) return 'NEW_YORK';
     if (h >= 0  && h < 8)  return 'ASIAN';

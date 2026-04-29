@@ -74,8 +74,17 @@ class DataService {
         if (price > 0) return { price, source: 'polygon' };
       }
       if (this.twelveKey) {
-        const r = await this._fetch(`${this.twelveBase}/price?symbol=${this._toTD(symbol)}&apikey=${this.twelveKey}`);
-        return { price: parseFloat(r.price), source: '12data' };
+        const r = await this._fetch(
+          `${this.twelveBase}/price?symbol=${encodeURIComponent(this._toTD(symbol))}&apikey=${this.twelveKey}`
+        );
+        const price = parseFloat(r?.price);
+        if (Number.isFinite(price) && price > 0) return { price, source: '12data' };
+
+        // Some Twelve Data forex/metal symbols return no spot quote even while candles work.
+        // Use the latest live candle close before falling back to mock data.
+        const candles = await this.getCandles(symbol, '15m', 2);
+        const close = candles?.closes?.[candles.closes.length - 1];
+        if (Number.isFinite(close) && close > 0) return { price: close, source: '12data_candle' };
       }
       // Simulate live price with small random walk
       const base = MOCK_BASE_PRICES[symbol] || 100;
@@ -404,7 +413,9 @@ class DataService {
 
   _toTD(symbol) {
     const map = { XAUUSD: 'XAU/USD', BTCUSD: 'BTC/USD', ETHUSD: 'ETH/USD' };
-    return map[symbol] || symbol;
+    if (map[symbol]) return map[symbol];
+    if (/^[A-Z]{6}$/.test(symbol)) return `${symbol.slice(0, 3)}/${symbol.slice(3)}`;
+    return symbol;
   }
 
   _toTDInterval(interval) {

@@ -1,45 +1,71 @@
 # APEX v3
 
-`APEX v3` is the clean rebuild of the APEX trading system using the original blueprint strategy as the core and selected research learnings from `apex-v2` as optional overlays.
+APEX v3 is a forex/gold signal system rebuilt around the original blueprint strategy, with selected APEX V2 research overlays used only where the data supported them.
 
-## What is included
+## Features
 
-- Blueprint-first signal engine in `backend/engines`
-- Backtest engine with replay diagnostics in `backend/backtest.js`
-- Optional policy overlays in `backend/overlays`
-- Railway deployment files in `backend/railway.json` and `backend/nixpacks.toml`
-- Rebuild notes in `docs/V3-REBUILD-PLAN.md`
+- Brain1 signal engine with multi-timeframe bias, confluence, session timing, and H4 close discipline.
+- Brain2/Brain3 guardian and exit modules for active signal monitoring.
+- Claude AI validation layer for signal review when `ANTHROPIC_API_KEY` is configured.
+- Live dashboard served by the backend at `/`.
+- Telegram alerts for full signals, ready alerts, and demo connectivity checks.
+- Real market data adapters for Twelve Data, Taapi, and Polygon/Massive.
+- Railway-ready root deployment config.
 
-## Current best research state
+## Current Live Profile
 
-Best research snapshot so far:
+- Policy: `target_growth_v6`
+- Live pairs: `EURUSD, USDCHF, GBPJPY, EURJPY, XAUUSD`
+- Mode: paper trading by default
+- Best 2-year research snapshot: `376` trades, `15.67` signals/month, `54.0%` win rate, `255.41R`, about `13.50%` simple monthly growth before real-world slippage/spread degradation.
 
-- Strategy profile: `anchor_turbo`
-- Policy: `quality_prune`
-- Synthetic intermarket enabled
-- Concurrent-trade research mode enabled
-
-Research output lives outside the repo in the local Codex workspace and was used to rank configurations before pushing this snapshot.
-
-## Run locally
-
-From `backend`:
+## Setup
 
 ```powershell
-npm install
+npm run install:all
+Copy-Item backend\.env.example backend\.env
+```
+
+Fill `backend\.env` with:
+
+- `ANTHROPIC_API_KEY`
+- `TWELVE_DATA_API_KEY`
+- `TAAPI_API_KEY`
+- `POLYGON_API_KEY` optional backup
+- `FINNHUB_API_KEY`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID` or `TELEGRAM_GROUP_ID`
+- `DATABASE_URL` optional but recommended for persistent history
+
+Telegram note: the bot must be started in DM or added to the target group/channel before alerts can send. If `/api/telegram/test` returns `chat not found`, the token is valid but the chat ID is wrong or the bot is not in that chat.
+
+## Run Locally
+
+```powershell
+npm run build
 npm start
 ```
 
-## Backtest
+Open:
 
-From `backend`:
+- Dashboard: `http://localhost:3001/`
+- Health: `http://localhost:3001/health`
+- Status: `http://localhost:3001/api/status`
+
+## Live Checks
 
 ```powershell
-npm run backtest
+Invoke-RestMethod http://localhost:3001/api/market/EURUSD
+Invoke-RestMethod -Method Post http://localhost:3001/api/telegram/test -ContentType 'application/json' -Body '{"symbol":"EURUSD"}'
+Invoke-RestMethod -Method Post http://localhost:3001/api/pipeline/EURJPY
 ```
 
-For custom research runs, use the local helper scripts in the Codex workspace.
+## Railway
 
-## Environment
+Deploy from the repo root. Railway should use:
 
-See `backend/.env.example` for required variables.
+- Build command from `nixpacks.toml`
+- Start command: `node backend/server.js`
+- Health path: `/health`
+
+Set the same environment variables in Railway as in `backend\.env`. Keep `PAPER_TRADE=true` for demo testing.
