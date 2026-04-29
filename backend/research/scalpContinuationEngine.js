@@ -37,12 +37,16 @@ class ScalpContinuationEngine extends Backtester {
     const skips = { session: 0, regime: 0, bias: 0, setup: 0, policy: 0, levels: 0, cooldown: 0 };
     let h1End = 0, h2End = 0, h4End = 0, d1End = 0, w1End = 0, m30End = 0;
     let cooldownUntil = -1;
-    const tsOf = (arr, j) => new Date(arr[j].datetime).getTime();
+    const tsOf = (arr, j) => this._tsMs(arr[j].datetime);
     const warmup = 500;
 
     for (let i = warmup; i < m15.length - 2; i++) {
-      const ts = new Date(m15[i].datetime);
+      const ts = this._normalizeUtc(m15[i].datetime);
       const ms = ts.getTime();
+      if (this._isWeekendEntryBlocked(ts)) {
+        skips.weekend = (skips.weekend || 0) + 1;
+        continue;
+      }
       if (i < cooldownUntil) {
         skips.cooldown++;
         continue;
@@ -242,13 +246,25 @@ class ScalpContinuationEngine extends Backtester {
     if (!risk || !futureM15.length) return null;
 
     const isBuy = signal.direction === 'BUY';
-    const entryMs = new Date(signal.timestamp).getTime();
+    const entryMs = this._tsMs(signal.timestamp);
     const timeStopHours = Number(this.researchOptions.scalpTimeStopHours || 12);
     let tp1Done = false;
     let totalR = 0;
 
-    for (const c of futureM15) {
-      const elapsedHours = (new Date(c.datetime).getTime() - entryMs) / 36e5;
+    for (let index = 0; index < futureM15.length; index++) {
+      const c = futureM15[index];
+      const previousCandle = index > 0 ? futureM15[index - 1] : null;
+      const elapsedHours = (this._tsMs(c.datetime) - entryMs) / 36e5;
+      const weekendExit = this._resolveWeekendFlatExit(previousCandle, c);
+      if (weekendExit) {
+        const closeR = isBuy ? (weekendExit.exitPrice - entry) / risk : (entry - weekendExit.exitPrice) / risk;
+        const rem = tp1Done ? 0.5 : 1;
+        return {
+          r: Number((totalR + closeR * rem).toFixed(2)),
+          exitReason: 'WEEKEND_FLAT',
+          exitTime: weekendExit.exitTime,
+        };
+      }
       const slLevel = tp1Done ? entry : sl;
       const slHit = isBuy ? c.low <= slLevel : c.high >= slLevel;
       if (slHit) {
@@ -324,12 +340,16 @@ class RangeReversionEngine extends ScalpContinuationEngine {
     const skips = { session: 0, regime: 0, setup: 0, policy: 0, levels: 0, cooldown: 0 };
     let h1End = 0, h2End = 0, h4End = 0, d1End = 0, w1End = 0, m30End = 0;
     let cooldownUntil = -1;
-    const tsOf = (arr, j) => new Date(arr[j].datetime).getTime();
+    const tsOf = (arr, j) => this._tsMs(arr[j].datetime);
     const warmup = 500;
 
     for (let i = warmup; i < m15.length - 2; i++) {
-      const ts = new Date(m15[i].datetime);
+      const ts = this._normalizeUtc(m15[i].datetime);
       const ms = ts.getTime();
+      if (this._isWeekendEntryBlocked(ts)) {
+        skips.weekend = (skips.weekend || 0) + 1;
+        continue;
+      }
       if (i < cooldownUntil) {
         skips.cooldown++;
         continue;

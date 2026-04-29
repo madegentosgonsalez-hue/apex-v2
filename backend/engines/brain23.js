@@ -50,6 +50,12 @@ class Brain2 {
       // Check SL (CANDLE CLOSE rule)
       if (this._slHit(signal, mkt)) { await this._onSL(signal, mkt.currentPrice); return; }
 
+      const weekendFlat = this._weekendFlatCheck(signal, mkt.currentPrice);
+      if (weekendFlat.action === 'EXIT') {
+        await this._onTimeStop(signal, mkt.currentPrice, weekendFlat);
+        return;
+      }
+
       const stale = this._staleTradeCheck(signal, mkt.currentPrice);
       if (stale.action === 'EXIT') {
         await this._onTimeStop(signal, mkt.currentPrice, stale);
@@ -389,6 +395,30 @@ Closing stale exposure to protect consistency and swap.`;
     }
 
     return { action: 'NONE' };
+  }
+
+  _weekendFlatCheck(signal, currentPrice) {
+    if (!signal?.created_at || signal.status !== 'ACTIVE') return { action: 'NONE' };
+    const enabled = String(process.env.WEEKEND_FLAT_ENABLED || 'true').toLowerCase() !== 'false';
+    if (!enabled) return { action: 'NONE' };
+    const fridayHour = Number(process.env.WEEKEND_FLAT_FRIDAY_UTC_HOUR || 20);
+    const fridayMinute = Number(process.env.WEEKEND_FLAT_FRIDAY_UTC_MINUTE || 0);
+    const now = new Date();
+    const day = now.getUTCDay();
+    const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const cutoff = fridayHour * 60 + fridayMinute;
+    if (day !== 5 || mins < cutoff) return { action: 'NONE' };
+
+    const risk = Math.abs(signal.entry_price - signal.stop_loss);
+    const dir = signal.direction === 'BUY' ? 1 : -1;
+    const currentR = risk > 0 ? ((currentPrice - signal.entry_price) * dir) / risk : 0;
+    return {
+      action: 'EXIT',
+      stage: 'WEEKEND',
+      ageHours: (Date.now() - new Date(signal.created_at).getTime()) / 36e5,
+      currentR,
+      reason: `Weekend flat rule triggered at Friday ${String(fridayHour).padStart(2, '0')}:${String(fridayMinute).padStart(2, '0')} UTC.`,
+    };
   }
 
   _fmt(signal, status, reason, price) {

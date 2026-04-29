@@ -55,6 +55,9 @@ class Backtester {
       syntheticIntermarket: false,
       timeStopHours: 72,
       timeStopMinR: 0.5,
+      weekendFlatEnabled: true,
+      weekendFlatFridayHour: 20,
+      weekendFlatFridayMinute: 0,
       ...(researchOptions || {}),
     };
     this._contextDailyCache = new Map();
@@ -156,7 +159,7 @@ class Backtester {
     const ms      = periodMs;
     const buckets = new Map();
     for (const c of candles) {
-      const key = Math.floor((new Date(c.datetime).getTime() - anchorMs) / ms);
+      const key = Math.floor((this._tsMs(c.datetime) - anchorMs) / ms);
       if (!buckets.has(key)) buckets.set(key, []);
       buckets.get(key).push(c);
     }
@@ -315,7 +318,7 @@ class Backtester {
       }
 
       const candles = all
-        .sort((a, b) => new Date(a.datetime) - new Date(b.datetime))
+        .sort((a, b) => this._tsMs(a.datetime) - this._tsMs(b.datetime))
         .filter((c, idx, arr) => idx === 0 || c.datetime !== arr[idx - 1].datetime);
       this._writeSeriesCache(symbol, yearsBack, interval, provider, candles);
       return candles;
@@ -384,7 +387,7 @@ class Backtester {
     }
 
     const candles = all
-      .sort((a, b) => new Date(a.datetime) - new Date(b.datetime))
+      .sort((a, b) => this._tsMs(a.datetime) - this._tsMs(b.datetime))
       .filter((c, idx, arr) => idx === 0 || c.datetime !== arr[idx - 1].datetime);
     this._writeSeriesCache(symbol, yearsBack, interval, provider, candles);
     return candles;
@@ -404,7 +407,7 @@ class Backtester {
 
   _findLatestIndex(candles, tsMs) {
     for (let i = candles.length - 1; i >= 0; i--) {
-      if (new Date(candles[i].datetime).getTime() <= tsMs) return i;
+      if (this._tsMs(candles[i].datetime) <= tsMs) return i;
     }
     return -1;
   }
@@ -469,6 +472,91 @@ class Backtester {
     return activeSessions[0]?.label || null;
   }
 
+  _weekendFlatSettings() {
+    return {
+      enabled: this.researchOptions.weekendFlatEnabled !== false,
+      fridayHour: Number(this.researchOptions.weekendFlatFridayHour ?? 20),
+      fridayMinute: Number(this.researchOptions.weekendFlatFridayMinute ?? 0),
+    };
+  }
+
+  _normalizeUtc(timestamp) {
+    if (!timestamp) return null;
+    if (timestamp instanceof Date) return new Date(timestamp.getTime());
+    const raw = String(timestamp).trim();
+    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+    return /(?:Z|[+-]\d{2}:\d{2})$/.test(normalized) ? new Date(normalized) : new Date(`${normalized}Z`);
+  }
+
+  _tsMs(timestamp) {
+    const ts = this._normalizeUtc(timestamp);
+    return ts ? ts.getTime() : NaN;
+  }
+
+  _tsHour(timestamp) {
+    const ts = this._normalizeUtc(timestamp);
+    return ts ? ts.getUTCHours() : NaN;
+  }
+
+  _weekendFlatCutoffFor(timestamp) {
+    const { fridayHour, fridayMinute } = this._weekendFlatSettings();
+    const ts = this._normalizeUtc(timestamp);
+    if (!ts) return null;
+
+    const daysBackToFriday = ts.getUTCDay() >= 5 ? ts.getUTCDay() - 5 : ts.getUTCDay() + 2;
+    const cutoff = new Date(Date.UTC(
+      ts.getUTCFullYear(),
+      ts.getUTCMonth(),
+      ts.getUTCDate(),
+      fridayHour,
+      fridayMinute,
+      0,
+      0
+    ));
+    cutoff.setUTCDate(cutoff.getUTCDate() - daysBackToFriday);
+    return cutoff;
+  }
+
+  _isWeekendEntryBlocked(timestamp) {
+    const { enabled, fridayHour, fridayMinute } = this._weekendFlatSettings();
+    if (!enabled || !timestamp) return false;
+    const ts = this._normalizeUtc(timestamp);
+    const day = ts.getUTCDay();
+    const mins = ts.getUTCHours() * 60 + ts.getUTCMinutes();
+    const cutoff = fridayHour * 60 + fridayMinute;
+    if (day === 6 || day === 0) return true;
+    return day === 5 && mins >= cutoff;
+  }
+
+  _isWeekendExitDue(timestamp) {
+    return this._isWeekendEntryBlocked(timestamp);
+  }
+
+  _resolveWeekendFlatExit(previousCandle, currentCandle) {
+    if (!currentCandle || !this._isWeekendExitDue(currentCandle.datetime)) return null;
+    if (previousCandle && this._isWeekendExitDue(previousCandle.datetime)) return null;
+
+    const currentTs = this._normalizeUtc(currentCandle.datetime);
+    const { fridayHour, fridayMinute } = this._weekendFlatSettings();
+    const cutoffMinutes = fridayHour * 60 + fridayMinute;
+    const currentMinutes = currentTs.getUTCHours() * 60 + currentTs.getUTCMinutes();
+
+    if (currentTs.getUTCDay() === 5 && currentMinutes >= cutoffMinutes) {
+      return {
+        exitPrice: Number.isFinite(currentCandle.open) ? currentCandle.open : currentCandle.close,
+        exitTime: currentCandle.datetime,
+      };
+    }
+
+    const cutoff = this._weekendFlatCutoffFor(currentTs);
+    return {
+      exitPrice: previousCandle && Number.isFinite(previousCandle.close)
+        ? previousCandle.close
+        : (Number.isFinite(currentCandle.open) ? currentCandle.open : currentCandle.close),
+      exitTime: cutoff ? cutoff.toISOString().slice(0, 19).replace('T', ' ') : currentCandle.datetime,
+    };
+  }
+
   _executionPolicy(signal) {
     const policy = this.pairPolicy[signal.symbol];
     if (!policy) return { allowed: true };
@@ -490,14 +578,14 @@ class Backtester {
     }
 
     if (Array.isArray(policy.allowedHoursUTC) && policy.allowedHoursUTC.length > 0) {
-      const hour = new Date(signal.timestamp).getUTCHours();
+      const hour = this._tsHour(signal.timestamp);
       if (!policy.allowedHoursUTC.includes(hour)) {
         return { allowed: false, reason: `${signal.symbol} only allows configured UTC hours` };
       }
     }
 
     if (Array.isArray(policy.blockedHoursUTC) && policy.blockedHoursUTC.length > 0) {
-      const hour = new Date(signal.timestamp).getUTCHours();
+      const hour = this._tsHour(signal.timestamp);
       if (policy.blockedHoursUTC.includes(hour)) {
         return { allowed: false, reason: `${signal.symbol} blocks configured UTC hours` };
       }
@@ -704,6 +792,8 @@ class Backtester {
   _analyzeSnapshot(symbol, h4s, h2s, h1s, d1s, w1s, ts, m30s = null, m15s = null) {
     const skip = (reason) => ({ signal: null, skipReason: reason });
     try {
+      if (this._isWeekendEntryBlocked(ts)) return skip('weekend');
+
       const b = this.brain1;
       const mkt = {
         weekly:      this._buildTF(w1s.slice(-52)),
@@ -792,7 +882,7 @@ class Backtester {
     const timeStopHours = Math.max(0, Number(this.researchOptions.timeStopHours || 0));
     const timeStopMinR = Number(this.researchOptions.timeStopMinR || 0);
     const hardMaxHoldHours = Math.max(0, Number(this.researchOptions.hardMaxHoldHours || 0));
-    const entryMs = new Date(signal.timestamp).getTime();
+    const entryMs = this._tsMs(signal.timestamp);
 
     let lot1Done = false, lot2Done = false, lot3Done = false;
     let beActive = false;
@@ -800,10 +890,23 @@ class Backtester {
     let trailSl  = sl;
     const atr    = startAtr || risk;
 
-    for (const c of futureH4) {
+    for (let index = 0; index < futureH4.length; index++) {
+      const c = futureH4[index];
+      const previousCandle = index > 0 ? futureH4[index - 1] : null;
       const hi = c.high, lo = c.low;
-      const elapsedHours = entryMs ? ((new Date(c.datetime).getTime() - entryMs) / 36e5) : 0;
+      const elapsedHours = entryMs ? ((this._tsMs(c.datetime) - entryMs) / 36e5) : 0;
       const closeR = isBuy ? (c.close - entry) / risk : (entry - c.close) / risk;
+      const weekendExit = this._resolveWeekendFlatExit(previousCandle, c);
+      if (weekendExit) {
+        const weekendR = isBuy ? (weekendExit.exitPrice - entry) / risk : (entry - weekendExit.exitPrice) / risk;
+        const rem = lot2Done ? 0.2 : lot1Done ? 0.6 : 1.0;
+        return {
+          r: parseFloat((totalR + weekendR * rem).toFixed(2)),
+          exitReason: 'WEEKEND_FLAT',
+          exitTime: weekendExit.exitTime,
+          exitPrice: weekendExit.exitPrice,
+        };
+      }
       if (hardMaxHoldHours > 0 && elapsedHours >= hardMaxHoldHours) {
         const rem = lot2Done ? 0.2 : lot1Done ? 0.6 : 1.0;
         return { r: parseFloat((totalR + closeR * rem).toFixed(2)), exitReason: 'HARD_TIME_STOP', exitTime: c.datetime, exitPrice: c.close };
@@ -933,7 +1036,7 @@ class Backtester {
 
     // Pointer-based sliding window (O(n) instead of O(n²))
     let h1End = 0, h2End = 0, d1End = 0, w1End = 0, m30End = 0, m15End = 0;
-    const tsOf = (arr, j) => new Date(arr[j].datetime).getTime();
+    const tsOf = (arr, j) => this._tsMs(arr[j].datetime);
 
     const H4_WARMUP = 200; // 200 H4 bars = ~50 days, ensures daily ema50 has enough bars
     const finalizeSignal = async (signal, h4Slice, h4Index, progressIndex, progressTotal) => {
@@ -976,7 +1079,7 @@ class Backtester {
         tier:       signal.confidence_tier,
         session:    signal.session,
         regime:     signal.regime,
-        hourUTC:     new Date(signal.timestamp).getUTCHours(),
+        hourUTC:     this._tsHour(signal.timestamp),
         levelType:   signal.level_type,
         confluence:  signal.confluence_score,
         adx:         signal.adx_value,
@@ -987,7 +1090,7 @@ class Backtester {
       });
 
       if (enforceSingleTradeLock) {
-        tradeEndTime = new Date(exit.exitTime).getTime();
+        tradeEndTime = this._tsMs(exit.exitTime);
       }
 
       if (onProgress) {
@@ -1001,7 +1104,7 @@ class Backtester {
       const total = m15.length - 1;
 
       for (let i = 0; i < m15.length; i++) {
-        const scanTs = new Date(m15[i].datetime);
+        const scanTs = this._normalizeUtc(m15[i].datetime);
         const scanMs = scanTs.getTime();
 
         while (closedH4End < h4.length - 2 && tsOf(h4, closedH4End + 2) <= scanMs) closedH4End++;
@@ -1040,7 +1143,7 @@ class Backtester {
       const total = h4.length - H4_WARMUP - 1;
 
       for (let i = H4_WARMUP; i < h4.length - 1; i++) {
-        const h4Ts = new Date(h4[i + 1].datetime);
+        const h4Ts = this._normalizeUtc(h4[i + 1].datetime);
         const h4Ms = h4Ts.getTime();
 
         if (enforceSingleTradeLock && tradeEndTime && h4Ms <= tradeEndTime) {

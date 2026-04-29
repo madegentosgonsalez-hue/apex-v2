@@ -150,6 +150,20 @@ async function boot() {
     return { allowed: true };
   }
 
+  function weekendEntryDecision(signal) {
+    const enabled = String(process.env.WEEKEND_FLAT_ENABLED || 'true').toLowerCase() !== 'false';
+    if (!enabled) return { allowed: true };
+    const ts = new Date(signal.timestamp || signal.detected_at || Date.now());
+    const day = ts.getUTCDay();
+    const mins = ts.getUTCHours() * 60 + ts.getUTCMinutes();
+    const fridayHour = Number(process.env.WEEKEND_FLAT_FRIDAY_UTC_HOUR || 20);
+    const fridayMinute = Number(process.env.WEEKEND_FLAT_FRIDAY_UTC_MINUTE || 0);
+    const cutoff = fridayHour * 60 + fridayMinute;
+    if (day === 6 || day === 0) return { allowed: false, reason: 'Weekend entry blocked' };
+    if (day === 5 && mins >= cutoff) return { allowed: false, reason: 'Friday cutoff entry blocked' };
+    return { allowed: true };
+  }
+
   function timeStatus() {
     const now = new Date();
     return {
@@ -546,6 +560,18 @@ async function boot() {
     const { signal } = scan;
     signal.detected_at = new Date().toISOString();
     signal.live_policy = livePolicyName;
+
+    const weekendGate = weekendEntryDecision(signal);
+    if (!weekendGate.allowed) {
+      signal.signal_type = 'NO_TRADE';
+      signal.ai_decision = 'REJECT';
+      signal.ai_conviction = 0;
+      signal.ai_reasoning = weekendGate.reason;
+      signal.ai_risk_flags = ['WEEKEND_FLAT_FILTER'];
+      await db.saveSignal(signal).catch(() => {});
+      console.log(`[Pipeline] ${symbol}: weekend flat skipped - ${weekendGate.reason}`);
+      return { sent: false, symbol, stage: 'weekend', reason: weekendGate.reason, signal };
+    }
 
     const liveGate = policyDecision(signal);
     if (!liveGate.allowed) {
