@@ -511,6 +511,19 @@ class Backtester {
       return { allowed: false, reason: `${signal.symbol} requires confluence ${policy.minConfluence}+` };
     }
 
+    const adx = Number(signal.adx ?? signal.adx_value);
+    if (policy.minAdx !== undefined) {
+      if (!Number.isFinite(adx) || adx < Number(policy.minAdx)) {
+        return { allowed: false, reason: `${signal.symbol} requires ADX ${policy.minAdx}+` };
+      }
+    }
+
+    if (policy.maxAdx !== undefined) {
+      if (!Number.isFinite(adx) || adx > Number(policy.maxAdx)) {
+        return { allowed: false, reason: `${signal.symbol} blocks ADX above ${policy.maxAdx}` };
+      }
+    }
+
     if (Array.isArray(policy.allowedDirections) && policy.allowedDirections.length > 0 && !policy.allowedDirections.includes(signal.direction)) {
       return { allowed: false, reason: `${signal.symbol} only allows ${policy.allowedDirections.join('/')}` };
     }

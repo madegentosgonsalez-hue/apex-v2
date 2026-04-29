@@ -68,7 +68,7 @@ const CONFIDENCE_TIERS = {
     emoji:           '💎',
     minConfluence:   6,
     minAIConviction: 88,   // NEW-06 FIX: was 90, but AI is capped at 90 — unreachable. 88 is achievable.
-    riskPct:         2.0,
+    riskPct:         1.0,
     signalType:      'FULL_SIGNAL',
     tag:             'PRIME SETUP — MAXIMUM SIZE',
   },
@@ -77,7 +77,7 @@ const CONFIDENCE_TIERS = {
     emoji:           '🥇',
     minConfluence:   5,
     minAIConviction: 75,
-    riskPct:         1.5,
+    riskPct:         0.75,
     signalType:      'FULL_SIGNAL',
     tag:             'HIGH CONFIDENCE',
   },
@@ -86,7 +86,7 @@ const CONFIDENCE_TIERS = {
     emoji:           '🥈',
     minConfluence:   4,
     minAIConviction: 65,
-    riskPct:         1.0,
+    riskPct:         0.5,
     signalType:      'READY_ALERT',  // Ready — not yet full signal
     tag:             'WATCH CLOSELY',
   },

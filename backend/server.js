@@ -22,6 +22,7 @@ const { TelegramNotifier, WhatsAppNotifier, Notifier } = require('./notification
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
+const TIER_RANK = { SKIP: 0, BRONZE: 1, SILVER: 2, GOLD: 3, DIAMOND: 4 };
 
 app.use(cors());
 app.use(express.json());
@@ -127,10 +128,22 @@ async function boot() {
 
     if (policy.disabled) return { allowed: false, reason: `${signal.symbol} disabled by ${livePolicyName}` };
     if (policy.sessions && !policy.sessions.includes(signal.session)) return { allowed: false, reason: `${signal.symbol} session ${signal.session} blocked` };
+    if (Array.isArray(policy.allowedRegimes) && policy.allowedRegimes.length && !policy.allowedRegimes.includes(signal.regime)) return { allowed: false, reason: `${signal.symbol} regime ${signal.regime} not allowed` };
     if (Array.isArray(policy.blockedRegimes) && policy.blockedRegimes.includes(signal.regime)) return { allowed: false, reason: `${signal.symbol} regime ${signal.regime} blocked` };
+    if (policy.minTier && TIER_RANK[signal.confidence_tier] < TIER_RANK[policy.minTier]) return { allowed: false, reason: `${signal.symbol} requires ${policy.minTier}+` };
+    if (policy.minConfluence && Number(signal.confluence_score || 0) < Number(policy.minConfluence)) return { allowed: false, reason: `${signal.symbol} requires confluence ${policy.minConfluence}+` };
+    const adx = Number(signal.adx ?? signal.adx_value);
+    if (policy.minAdx !== undefined && (!Number.isFinite(adx) || adx < Number(policy.minAdx))) return { allowed: false, reason: `${signal.symbol} requires ADX ${policy.minAdx}+` };
+    if (policy.maxAdx !== undefined && (!Number.isFinite(adx) || adx > Number(policy.maxAdx))) return { allowed: false, reason: `${signal.symbol} ADX above ${policy.maxAdx}` };
+    if (Array.isArray(policy.allowedDirections) && policy.allowedDirections.length && !policy.allowedDirections.includes(signal.direction)) return { allowed: false, reason: `${signal.symbol} direction ${signal.direction} not allowed` };
     if (Array.isArray(policy.allowedEntryTypes) && policy.allowedEntryTypes.length && !policy.allowedEntryTypes.includes(signal.entry_type)) return { allowed: false, reason: `${signal.symbol} entry ${signal.entry_type} blocked` };
+    if (Array.isArray(policy.blockedEntryTypes) && policy.blockedEntryTypes.includes(signal.entry_type)) return { allowed: false, reason: `${signal.symbol} entry ${signal.entry_type} blocked` };
+    if (Array.isArray(policy.allowedLevelTypes) && policy.allowedLevelTypes.length && !policy.allowedLevelTypes.includes(signal.level_type)) return { allowed: false, reason: `${signal.symbol} level ${signal.level_type} not allowed` };
+    if (Array.isArray(policy.blockedLevelTypes) && policy.blockedLevelTypes.includes(signal.level_type)) return { allowed: false, reason: `${signal.symbol} level ${signal.level_type} blocked` };
     if (Array.isArray(policy.blockedDirections) && policy.blockedDirections.includes(signal.direction)) return { allowed: false, reason: `${signal.symbol} direction ${signal.direction} blocked` };
-    if (Array.isArray(policy.blockedHoursUTC) && policy.blockedHoursUTC.includes(new Date().getUTCHours())) return { allowed: false, reason: `${signal.symbol} UTC hour blocked` };
+    const hour = new Date(signal.timestamp || signal.detected_at || Date.now()).getUTCHours();
+    if (Array.isArray(policy.allowedHoursUTC) && policy.allowedHoursUTC.length && !policy.allowedHoursUTC.includes(hour)) return { allowed: false, reason: `${signal.symbol} UTC hour not allowed` };
+    if (Array.isArray(policy.blockedHoursUTC) && policy.blockedHoursUTC.includes(hour)) return { allowed: false, reason: `${signal.symbol} UTC hour blocked` };
     if (policy.blockedLevelRegimes && Array.isArray(policy.blockedLevelRegimes[signal.level_type]) && policy.blockedLevelRegimes[signal.level_type].includes(signal.regime)) {
       return { allowed: false, reason: `${signal.symbol} ${signal.level_type}/${signal.regime} blocked` };
     }

@@ -35,7 +35,7 @@ const parseList = (value, fallback) => {
 
 const providerForSymbol = (symbol) => (symbol === 'XAUUSD' ? 'twelve' : 'polygon');
 const dataForProvider = (provider) => (provider === 'twelve' ? twelveData : polygonData);
-const tierRiskPct = { SILVER: 1.0, GOLD: 1.5, DIAMOND: 2.0 };
+const tierRiskPct = { SILVER: 0.5, GOLD: 0.75, DIAMOND: 1.0 };
 
 async function main() {
   const yearsBack = Number(process.env.RESEARCH_YEARS_BACK || 1);

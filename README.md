@@ -14,10 +14,10 @@ APEX v3 is a forex/gold signal system rebuilt around the original blueprint stra
 
 ## Current Live Profile
 
-- Policy: `target_growth_v6`
+- Policy: `audit_focus_v5`
 - Live pairs: `EURUSD, USDCHF, GBPJPY, EURJPY, XAUUSD`
 - Mode: paper trading by default
-- Best 2-year research snapshot: `376` trades, `15.67` signals/month, `54.0%` win rate, `255.41R`, about `13.50%` simple monthly growth before real-world slippage/spread degradation.
+- Best current research snapshot after the April 2026 audit: `174` raw trades, `7.24` signals/month, `70.1%` win rate, `194.84R`. With real tier risk, 5 max open trades, 5 max entries per pair, and 0.15R execution drag, the portfolio simulation ended around `+98%` over 2 years. This is safer than the older high-volume profile, but it does not honestly meet a 10-15% monthly target.
 
 ## Setup
 

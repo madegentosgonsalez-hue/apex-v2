@@ -14,7 +14,7 @@ function simulatePortfolio(results, options = {}) {
     executionDragR = 0,
   } = options;
 
-  const tierRiskPct = { SILVER: 1.0, GOLD: 1.5, DIAMOND: 2.0 };
+  const tierRiskPct = { SILVER: 0.5, GOLD: 0.75, DIAMOND: 1.0 };
   const trades = results.flatMap((row) =>
     (row.tradeLog || []).map((trade, index) => ({
       id: `${row.symbol}-${index}`,
