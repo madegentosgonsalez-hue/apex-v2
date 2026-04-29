@@ -62,10 +62,19 @@ class TelegramNotifier {
     }
   }
 
-  formatFullSignal(signal, ai) {
+  formatFullSignal(signal, ai, plan) {
     const time = this._fmtTime(signal.detected_at || signal.created_at || new Date());
     const fmt = (value) => this._fmtPrice(value, signal.symbol);
     const reasons = this._buildReasons(signal);
+    const execution = plan ? [
+      '<b>Execution</b>',
+      `Account: ${this._fmtMoney(plan.accountBalance)}`,
+      `Risk: ${plan.riskPct}% = ${this._fmtMoney(plan.riskAmount)}`,
+      `Open now: <b>${plan.totalLots.toFixed(2)} lot</b>`,
+      `TP1 close: ${plan.tp1Lots.toFixed(2)} lot | TP2 close: ${plan.tp2Lots.toFixed(2)} lot | Runner: ${plan.runnerLots.toFixed(2)} lot`,
+      'Scale-out model: 40% / 40% / 20%',
+      '------------------------------',
+    ] : [];
 
     return [
       `<b>APEX SIGNAL - ${signal.symbol}</b>`,
@@ -81,6 +90,7 @@ class TelegramNotifier {
       `TP2 (1:3): ${fmt(signal.tp2)}`,
       `Risk: ${signal.risk_pct}%`,
       '------------------------------',
+      ...execution,
       `Confluence: ${signal.confluence_score}/6`,
       `Claude AI: ${ai?.conviction || 0}% conviction`,
       `Regime: ${signal.regime}`,
@@ -96,7 +106,7 @@ class TelegramNotifier {
     ].filter(Boolean).join('\n');
   }
 
-  formatReadyAlert(signal) {
+  formatReadyAlert(signal, plan) {
     const time = this._fmtTime(signal.detected_at || signal.created_at || new Date());
     return [
       `<b>APEX READY ALERT - ${signal.symbol}</b>`,
@@ -106,6 +116,7 @@ class TelegramNotifier {
       `Sydney: ${time.sydney}`,
       `Confluence: ${signal.confluence_score}/6`,
       `Entry watch: ${this._fmtPrice(signal.entry_price, signal.symbol)}`,
+      plan ? `If promoted to full signal: ${plan.totalLots.toFixed(2)} lot on ${this._fmtMoney(plan.accountBalance)} account.` : '',
       'Not a full signal yet. Wait for final trigger.',
     ].join('\n');
   }
@@ -144,6 +155,16 @@ class TelegramNotifier {
     };
   }
 
+  _fmtMoney(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '-';
+    return new Intl.NumberFormat('en-AU', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 2,
+    }).format(n);
+  }
+
   _buildReasons(signal) {
     const reasons = [];
     if (signal.htf_trend_aligned) reasons.push('- HTF trend aligned');
@@ -173,14 +194,16 @@ class WhatsAppNotifier {
 }
 
 class Notifier {
-  constructor({ telegram, whatsapp, db } = {}) {
+  constructor({ telegram, whatsapp, db, dataService } = {}) {
     this.tg = telegram;
     this.wa = whatsapp;
     this.db = db;
+    this.data = dataService;
   }
 
   async sendSignal(signal, ai) {
-    const msg = this.tg.formatFullSignal(signal, ai);
+    const plan = await this.getExecutionPlan(signal);
+    const msg = this.tg.formatFullSignal(signal, ai, plan);
     const result = await this.tg.send(msg, 'FULL_SIGNAL');
     await this.db.logNotification({
       signal_id: signal.id,
@@ -193,7 +216,8 @@ class Notifier {
   }
 
   async sendReadyAlert(signal) {
-    const result = await this.tg.send(this.tg.formatReadyAlert(signal), 'READY');
+    const plan = await this.getExecutionPlan(signal);
+    const result = await this.tg.send(this.tg.formatReadyAlert(signal, plan), 'READY');
     await this.db.logNotification({
       signal_id: signal.id,
       channel: 'TELEGRAM',
@@ -210,6 +234,95 @@ class Notifier {
 
   async send(msg, type) {
     return this.tg.send(msg, type);
+  }
+
+  async getExecutionPlan(signal) {
+    const config = await this.db.getConfig().catch(() => ({}));
+    const rawBalance = config?.demo_account_size;
+    const accountBalance = Number(typeof rawBalance === 'string' ? rawBalance.replace(/"/g, '') : rawBalance || process.env.DEMO_ACCOUNT_SIZE || 50000);
+    const riskPct = Number(signal.risk_pct || 0);
+    const riskDistance = this._riskDistance(signal);
+    if (!Number.isFinite(accountBalance) || accountBalance <= 0 || !Number.isFinite(riskPct) || riskPct <= 0 || !Number.isFinite(riskDistance) || riskDistance <= 0) {
+      return null;
+    }
+
+    const riskAmount = accountBalance * (riskPct / 100);
+    const usdPerQuote = await this._usdPerQuoteUnit(signal.symbol, signal.entry_price);
+    if (!Number.isFinite(usdPerQuote) || usdPerQuote <= 0) return null;
+
+    const multiplier = signal.symbol === 'XAUUSD' ? 100 : 100000;
+    const lossPerLotUsd = riskDistance * multiplier * usdPerQuote;
+    if (!Number.isFinite(lossPerLotUsd) || lossPerLotUsd <= 0) return null;
+
+    const lots = riskAmount / lossPerLotUsd;
+    if (!Number.isFinite(lots) || lots <= 0) return null;
+
+    const normalize = (value) => Number(value.toFixed(2));
+    const fullLots = normalize(lots);
+    const tp1Lots = normalize(fullLots * 0.4);
+    const tp2Lots = normalize(fullLots * 0.4);
+    const runnerLots = normalize(fullLots - tp1Lots - tp2Lots);
+
+    return {
+      accountBalance: Number(accountBalance.toFixed(2)),
+      riskPct: Number(riskPct.toFixed(2)),
+      riskAmount: Number(riskAmount.toFixed(2)),
+      totalLots: fullLots,
+      tp1Lots,
+      tp2Lots,
+      runnerLots: runnerLots > 0 ? runnerLots : 0,
+    };
+  }
+
+  formatTpExecution(signal, plan, level) {
+    if (!plan) return null;
+    if (level === 'TP1') {
+      return [
+        `Close now: ${plan.tp1Lots.toFixed(2)} lot (40%)`,
+        `Leave open: ${(plan.tp2Lots + plan.runnerLots).toFixed(2)} lot`,
+        'Move stop to breakeven.',
+      ].join(' | ');
+    }
+    if (level === 'TP2') {
+      return [
+        `Close now: ${plan.tp2Lots.toFixed(2)} lot (40%)`,
+        `Runner left: ${plan.runnerLots.toFixed(2)} lot (20%)`,
+        'Move stop to TP1.',
+      ].join(' | ');
+    }
+    return null;
+  }
+
+  _riskDistance(signal) {
+    const entry = Number(signal.entry_price);
+    const tp1 = Number(signal.tp1);
+    const stop = Number(signal.stop_loss);
+    const fromTp1 = Number.isFinite(entry) && Number.isFinite(tp1) ? Math.abs(tp1 - entry) / 2 : 0;
+    const fromStop = Number.isFinite(entry) && Number.isFinite(stop) ? Math.abs(entry - stop) : 0;
+    return fromTp1 > 0 ? fromTp1 : fromStop;
+  }
+
+  _quoteCurrency(symbol = '') {
+    return symbol.length === 6 ? symbol.slice(3) : 'USD';
+  }
+
+  async _usdPerQuoteUnit(symbol, fallbackPrice) {
+    if (symbol === 'XAUUSD') return 1;
+    const quote = this._quoteCurrency(symbol);
+    if (quote === 'USD') return 1;
+
+    if (quote === 'CHF' && Number(fallbackPrice) > 0) {
+      return 1 / Number(fallbackPrice);
+    }
+
+    if (!this.data) return null;
+    try {
+      const pair = `USD${quote}`;
+      const tick = await this.data.getCurrentPrice(pair);
+      const price = Number(tick?.price);
+      if (Number.isFinite(price) && price > 0) return 1 / price;
+    } catch {}
+    return null;
   }
 }
 

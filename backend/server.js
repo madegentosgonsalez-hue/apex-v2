@@ -64,7 +64,7 @@ async function boot() {
     from:       process.env.TWILIO_WHATSAPP_FROM,
     to:         process.env.WHATSAPP_TO,
   });
-  const notifier = new Notifier({ telegram, whatsapp, db });
+  const notifier = new Notifier({ telegram, whatsapp, db, dataService: data });
 
   // AI
   const ai = new AIAnalyst({ db, apiKey: process.env.ANTHROPIC_API_KEY });

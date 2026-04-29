@@ -205,6 +205,8 @@ class Brain2 {
 
   // ── EVENT HANDLERS ────────────────────────────────────────────────────────
   async _onTP(signal, tp, price) {
+    const plan = await this.notifier.getExecutionPlan(signal).catch(() => null);
+    const tpGuide = this.notifier.formatTpExecution(signal, plan, tp.level);
     if (tp.level === 'TP1') {
       await this.db.updateSignalStatus(signal.id, 'TP1');
       await this.db.updateSignalSL(signal.id, signal.entry_price);
@@ -216,7 +218,8 @@ TP1 Price : ${signal.tp1}
 Banked    : +2.0R on 40%
 ━━━━━━━━━━━━━━━━━━━━━━━
 ✅ SL → BREAKEVEN
-🎯 Riding 60% to TP2 (${signal.tp2})`;
+🎯 Riding 60% to TP2 (${signal.tp2})
+${tpGuide ? `━━━━━━━━━━━━━━━━━━━━━━━\n${tpGuide}` : ''}`;
       await this.notifier.send(msg, 'TP_HIT');
     } else {
       await this.db.updateSignalStatus(signal.id, 'TP2');
@@ -227,7 +230,8 @@ TP2 Price : ${signal.tp2}
 Banked    : +3.0R on another 40%
 ━━━━━━━━━━━━━━━━━━━━━━━
 🏃 Trailing 20% — SL at TP1
-Let it run.`;
+Let it run.
+${tpGuide ? `━━━━━━━━━━━━━━━━━━━━━━━\n${tpGuide}` : ''}`;
       await this.notifier.send(msg, 'TP_HIT');
     }
   }
