@@ -483,6 +483,25 @@ class Backtester {
       return { allowed: false, reason: `${signal.symbol} requires ${policy.minTier}+` };
     }
 
+    if (policy.minConfluence && Number(signal.confluence_score || 0) < Number(policy.minConfluence)) {
+      return { allowed: false, reason: `${signal.symbol} requires confluence ${policy.minConfluence}+` };
+    }
+
+    if (Array.isArray(policy.allowedEntryTypes) && policy.allowedEntryTypes.length > 0 && !policy.allowedEntryTypes.includes(signal.entry_type)) {
+      return { allowed: false, reason: `${signal.symbol} only allows ${policy.allowedEntryTypes.join('/')}` };
+    }
+
+    if (Array.isArray(policy.blockedEntryTypes) && policy.blockedEntryTypes.includes(signal.entry_type)) {
+      return { allowed: false, reason: `${signal.symbol} blocks ${signal.entry_type}` };
+    }
+
+    if (policy.sessionEntryTypes && Array.isArray(policy.sessionEntryTypes[signal.session])) {
+      const allowedForSession = policy.sessionEntryTypes[signal.session];
+      if (!allowedForSession.includes(signal.entry_type)) {
+        return { allowed: false, reason: `${signal.symbol} ${signal.session} only allows ${allowedForSession.join('/')}` };
+      }
+    }
+
     return { allowed: true };
   }
 
