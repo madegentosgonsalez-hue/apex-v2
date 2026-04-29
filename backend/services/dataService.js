@@ -203,6 +203,21 @@ class DataService {
     });
   }
 
+  buildSeries(candles = []) {
+    if (!Array.isArray(candles) || !candles.length) {
+      return this._buildCandleObj([], { ema21: 0, ema50: 0, rsi: 50, atr: 0, adx: 20 });
+    }
+
+    const closes = candles.map((c) => Number(c.close));
+    return this._buildCandleObj(candles, {
+      ema21: this._ema(closes, 21).slice(-1)[0] ?? 0,
+      ema50: this._ema(closes, 50).slice(-1)[0] ?? 0,
+      rsi: this._rsi(closes, 14).slice(-1)[0] ?? 50,
+      atr: this._atr(candles, 14).slice(-1)[0] ?? 0,
+      adx: this._adx(candles, 14) ?? 20,
+    });
+  }
+
   async _polygonGet(symbol, interval, size) {
     if (!this._polygonSupportsSymbol(symbol)) {
       throw new Error(`Polygon does not support ${symbol} in this adapter`);

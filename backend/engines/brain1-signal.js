@@ -31,26 +31,26 @@ class Brain1 {
       const pre = await this._prefilter(symbol);
       if (!pre.pass) return this._skip(symbol, pre.reason);
 
-      // STEP 2 — Fetch all 7 timeframes + intermarket
-      const mkt = await this._fetchAll(symbol);
-      if (!mkt) return this._skip(symbol, 'Data unavailable');
-
-      // STEP 3 — Regime check
-      const regime = this._regime(mkt);
-      if (!regime.signalAllowed) return this._skip(symbol, `Regime blocked: ${regime.label}`);
-
-      // STEP 3b — FLAW-15 FIX: H4 candle close confirmation
+      // STEP 2 — FLAW-15 FIX: H4 candle close confirmation
       // Only scan when H4 candle has recently closed or is about to close
       // Prevents acting on incomplete candles that may invalidate at close
       if (!this._h4CandleClosed()) {
         return this._skip(symbol, 'H4 candle mid-formation — waiting for close confirmation');
       }
 
-      // STEP 4 — Top-down directional bias (Weekly + Daily must agree)
+      // STEP 3 — Fetch market structure only when the H4 window is valid
+      const mkt = await this._fetchAll(symbol);
+      if (!mkt) return this._skip(symbol, 'Data unavailable');
+
+      // STEP 4 — Regime check
+      const regime = this._regime(mkt);
+      if (!regime.signalAllowed) return this._skip(symbol, `Regime blocked: ${regime.label}`);
+
+      // STEP 5 — Top-down directional bias (Weekly + Daily must agree)
       const bias = this._topDownBias(mkt);
       if (bias.direction === 'NEUTRAL') return this._skip(symbol, 'HTF conflict — W and D disagree');
 
-      // STEP 5 — Location: is price at a meaningful level?
+      // STEP 6 — Location: is price at a meaningful level?
       const loc = this._locationCheck(mkt, bias.direction);
       if (!loc.valid) return this._skip(symbol, 'Price mid-range — no key level nearby');
 
@@ -745,22 +745,58 @@ class Brain1 {
   // ── FETCH ALL TIMEFRAMES ──────────────────────────────────────────────────
   async _fetchAll(symbol) {
     try {
-      const [weekly, daily, h4, h2, h1, m30, m15, intermarket] = await Promise.all([
-        this.data.getCandles(symbol, '1W',  52),
-        this.data.getCandles(symbol, '1D',  100),
-        this.data.getCandles(symbol, '4h',  100),
-        this.data.getCandles(symbol, '2h',  100),
-        this.data.getCandles(symbol, '1h',  100),
-        this.data.getCandles(symbol, '30m', 80),
-        this.data.getCandles(symbol, '15m', 50),
+      // Data budget fix:
+      // 1) fetch only daily + 15m directly
+      // 2) derive weekly from daily
+      // 3) derive H4/H2/H1/M30 from the richer 15m base series
+      const [daily, m15Base, intermarket] = await Promise.all([
+        this.data.getCandles(symbol, '1D', 260),
+        this.data.getCandles(symbol, '15m', 1600),
         this.data.getIntermarket(symbol),
       ]);
-      if (!h4 || h4.closes?.length < 20) return null;
+
+      const weekly = this._deriveWeeklyFromDaily(daily?.candles || []);
+      const h4 = this._deriveFromLower(m15Base?.candles || [], 16);
+      const h2 = this._deriveFromLower(m15Base?.candles || [], 8);
+      const h1 = this._deriveFromLower(m15Base?.candles || [], 4);
+      const m30 = this._deriveFromLower(m15Base?.candles || [], 2);
+      const m15 = this.data.buildSeries((m15Base?.candles || []).slice(-200));
+
+      if (!h4 || h4.closes?.length < 20 || !daily || daily.closes?.length < 50) return null;
       return { weekly, daily, h4, h2, h1, m30, m15, intermarket };
     } catch (err) {
       console.error(`[Brain1] Fetch error for ${symbol}:`, err.message);
       return null;
     }
+  }
+
+  _deriveWeeklyFromDaily(candles) {
+    const chunks = this._resampleCandles(candles, 5);
+    return this.data.buildSeries(chunks.slice(-80));
+  }
+
+  _deriveFromLower(candles, step) {
+    const chunks = this._resampleCandles(candles, step);
+    return this.data.buildSeries(chunks);
+  }
+
+  _resampleCandles(candles, step) {
+    if (!Array.isArray(candles) || candles.length < step) return [];
+    const usable = candles.slice(candles.length % step);
+    const rows = [];
+
+    for (let i = 0; i <= usable.length - step; i += step) {
+      const slice = usable.slice(i, i + step);
+      rows.push({
+        open: slice[0].open,
+        high: Math.max(...slice.map((c) => Number(c.high))),
+        low: Math.min(...slice.map((c) => Number(c.low))),
+        close: slice[slice.length - 1].close,
+        volume: slice.reduce((sum, c) => sum + Number(c.volume || 0), 0),
+      });
+    }
+
+    return rows;
   }
 
   _skip(symbol, reason) {
