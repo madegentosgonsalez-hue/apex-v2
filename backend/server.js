@@ -130,6 +130,240 @@ async function boot() {
     return telegram.authState || 'PENDING';
   }
 
+  function parseStoredValue(value) {
+    if (value === null || value === undefined) return value;
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (!trimmed.length) return '';
+    try { return JSON.parse(trimmed); } catch { return trimmed; }
+  }
+
+  async function getParsedConfig() {
+    const raw = await db.getConfig();
+    return Object.fromEntries(
+      Object.entries(raw || {}).map(([key, value]) => [key, parseStoredValue(value)])
+    );
+  }
+
+  function getRiskDistance(signal) {
+    const entry = Number(signal.entry_price);
+    const tp1 = Number(signal.tp1);
+    const stop = Number(signal.stop_loss);
+    const fromTp1 = Number.isFinite(entry) && Number.isFinite(tp1) ? Math.abs(tp1 - entry) / 2 : 0;
+    const fromStop = Number.isFinite(entry) && Number.isFinite(stop) ? Math.abs(entry - stop) : 0;
+    return fromTp1 > 0 ? fromTp1 : fromStop;
+  }
+
+  function getQuote(symbol = '') {
+    return symbol.length === 6 ? symbol.slice(3) : 'USD';
+  }
+
+  async function getCandleSnapshot(symbol, interval = '15m', size = 80) {
+    const candles = await data.getCandles(symbol, interval, size);
+    const close = candles?.closes?.[candles.closes.length - 1];
+    return {
+      symbol,
+      interval,
+      source: `${interval}_close`,
+      price: Number.isFinite(close) ? close : null,
+      candles,
+    };
+  }
+
+  async function getUsdConversionMap(symbols = []) {
+    const quotes = [...new Set(symbols.map(getQuote).filter((quote) => quote && quote !== 'USD'))];
+    const pairs = quotes.map((quote) => `USD${quote}`);
+    const rows = await Promise.all(pairs.map(async (pair) => {
+      try {
+        const snapshot = await getCandleSnapshot(pair, '15m', 2);
+        return [pair, Number(snapshot.price) || null];
+      } catch {
+        return [pair, null];
+      }
+    }));
+    return Object.fromEntries(rows);
+  }
+
+  function usdPerQuoteUnit(symbol, conversionMap) {
+    const quote = getQuote(symbol);
+    if (quote === 'USD') return 1;
+    const rate = Number(conversionMap[`USD${quote}`]);
+    if (Number.isFinite(rate) && rate > 0) return 1 / rate;
+    return null;
+  }
+
+  function calculateLots(signal, accountBalance, conversionMap) {
+    const balance = Number(accountBalance);
+    const riskPct = Number(signal.risk_pct || 0);
+    const riskDistance = getRiskDistance(signal);
+    if (!Number.isFinite(balance) || balance <= 0 || !Number.isFinite(riskPct) || riskPct <= 0 || !Number.isFinite(riskDistance) || riskDistance <= 0) {
+      return null;
+    }
+
+    const riskAmount = balance * (riskPct / 100);
+    const symbol = signal.symbol || '';
+    let lossPerLotUsd = null;
+
+    if (symbol === 'XAUUSD') {
+      lossPerLotUsd = riskDistance * 100;
+    } else if (symbol.length === 6) {
+      const usdQuote = usdPerQuoteUnit(symbol, conversionMap);
+      if (!Number.isFinite(usdQuote) || usdQuote <= 0) return null;
+      lossPerLotUsd = riskDistance * 100000 * usdQuote;
+    }
+
+    if (!Number.isFinite(lossPerLotUsd) || lossPerLotUsd <= 0) return null;
+    const lots = riskAmount / lossPerLotUsd;
+    return Number.isFinite(lots) ? Number(lots.toFixed(2)) : null;
+  }
+
+  function calculateCurrentR(signal, currentPrice) {
+    const price = Number(currentPrice);
+    const entry = Number(signal.entry_price);
+    const riskDistance = getRiskDistance(signal);
+    if (!Number.isFinite(price) || !Number.isFinite(entry) || !Number.isFinite(riskDistance) || riskDistance <= 0) return null;
+    const dir = signal.direction === 'BUY' ? 1 : -1;
+    return Number((((price - entry) * dir) / riskDistance).toFixed(2));
+  }
+
+  async function buildDashboard(days = 120, historyLimit = 220) {
+    const [pairs, activeSignals, history, performance, dailySummary, config] = await Promise.all([
+      db.getAllPairs(),
+      db.getActiveSignals(),
+      db.getSignalHistory({ limit: historyLimit, offset: 0 }),
+      db.getPerformanceStats({ days }),
+      db.getDailySummary(),
+      getParsedConfig(),
+    ]);
+
+    const baseBalance = Number(config.demo_account_size || process.env.DEMO_ACCOUNT_SIZE || 50000);
+    const scanIntervalMins = Number(config.scan_interval_mins || 15);
+    const guardianIntervalMins = Number(config.guardian_interval_mins || 5);
+    const trackedSymbols = [...new Set([...livePairs, ...activeSignals.map((signal) => signal.symbol)].filter(Boolean))];
+    const trackedPrices = await Promise.all(trackedSymbols.map((symbol) => getCandleSnapshot(symbol, '15m', 2).catch(() => ({ symbol, price: null, source: 'unavailable' }))));
+    const priceMap = Object.fromEntries(trackedPrices.map((row) => [row.symbol, { symbol: row.symbol, price: row.price, source: row.source }]));
+    const conversionMap = await getUsdConversionMap([...trackedSymbols, ...livePairs]);
+
+    const executedClosed = history
+      .filter((signal) => signal.outcome && ['WIN', 'LOSS', 'BREAKEVEN'].includes(signal.outcome))
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+    const openTrades = [...activeSignals].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    let realizedBalance = baseBalance;
+    let wins = 0;
+    let losses = 0;
+    let breakevens = 0;
+    let netR = 0;
+    let grossWinsR = 0;
+    let grossLossesR = 0;
+
+    const closedLedger = executedClosed.map((signal) => {
+      const startBalance = realizedBalance;
+      const riskPct = Number(signal.risk_pct || 0);
+      const riskAmount = startBalance * (riskPct / 100);
+      const pnlR = Number(signal.pnl_r || 0);
+      const pnlAmount = Number((riskAmount * pnlR).toFixed(2));
+      realizedBalance = Number((realizedBalance + pnlAmount).toFixed(2));
+      if (signal.outcome === 'WIN') wins++;
+      if (signal.outcome === 'LOSS') losses++;
+      if (signal.outcome === 'BREAKEVEN') breakevens++;
+      netR += pnlR;
+      if (pnlR > 0) grossWinsR += pnlR;
+      if (pnlR < 0) grossLossesR += Math.abs(pnlR);
+
+      return {
+        ...signal,
+        state: 'CLOSED',
+        start_balance: Number(startBalance.toFixed(2)),
+        end_balance: Number(realizedBalance.toFixed(2)),
+        risk_amount: Number(riskAmount.toFixed(2)),
+        pnl_amount: pnlAmount,
+        pnl_percent: Number(((pnlAmount / startBalance) * 100).toFixed(2)),
+        lots: calculateLots(signal, startBalance, conversionMap),
+      };
+    });
+
+    const activeLedger = openTrades.map((signal) => {
+      const entryBalance = realizedBalance;
+      const riskPct = Number(signal.risk_pct || 0);
+      const riskAmount = entryBalance * (riskPct / 100);
+      const currentPrice = priceMap[signal.symbol]?.price ?? null;
+      const currentR = calculateCurrentR(signal, currentPrice);
+      const floatingAmount = Number.isFinite(currentR) ? Number((riskAmount * currentR).toFixed(2)) : null;
+
+      return {
+        ...signal,
+        state: 'OPEN',
+        current_price: currentPrice,
+        price_source: priceMap[signal.symbol]?.source || 'unavailable',
+        current_r: currentR,
+        floating_amount: floatingAmount,
+        floating_percent: Number.isFinite(floatingAmount) ? Number(((floatingAmount / entryBalance) * 100).toFixed(2)) : null,
+        risk_amount: Number(riskAmount.toFixed(2)),
+        entry_balance: Number(entryBalance.toFixed(2)),
+        lots: calculateLots(signal, entryBalance, conversionMap),
+      };
+    });
+
+    const floatingPnL = activeLedger.reduce((sum, signal) => sum + (Number(signal.floating_amount) || 0), 0);
+    const floatingWinners = activeLedger.filter((signal) => Number(signal.current_r) > 0).length;
+    const floatingLosers = activeLedger.filter((signal) => Number(signal.current_r) < 0).length;
+    const closedTrades = closedLedger.length;
+    const decisiveTrades = wins + losses;
+    const winRate = decisiveTrades > 0 ? Number(((wins / decisiveTrades) * 100).toFixed(1)) : 0;
+    const totalBalance = Number((realizedBalance + floatingPnL).toFixed(2));
+    const growthPct = Number((((totalBalance - baseBalance) / baseBalance) * 100).toFixed(2));
+    const realizedGrowthPct = Number((((realizedBalance - baseBalance) / baseBalance) * 100).toFixed(2));
+    const avgR = closedTrades > 0 ? Number((netR / closedTrades).toFixed(2)) : 0;
+    const profitFactor = grossLossesR > 0 ? Number((grossWinsR / grossLossesR).toFixed(2)) : null;
+    const equityCurve = [
+      { at: null, label: 'Start', balance: Number(baseBalance.toFixed(2)), delta: 0, symbol: null },
+      ...closedLedger.map((signal) => ({
+        at: signal.closed_at || signal.created_at,
+        label: signal.symbol,
+        balance: signal.end_balance,
+        delta: signal.pnl_amount,
+        symbol: signal.symbol,
+        outcome: signal.outcome,
+      })),
+      { at: new Date().toISOString(), label: 'Live', balance: totalBalance, delta: Number(floatingPnL.toFixed(2)), symbol: 'LIVE', outcome: floatingPnL >= 0 ? 'WIN' : 'LOSS' },
+    ];
+
+    return {
+      baseBalance: Number(baseBalance.toFixed(2)),
+      realizedBalance: Number(realizedBalance.toFixed(2)),
+      totalBalance,
+      realizedGrowthPct,
+      growthPct,
+      floatingPnL: Number(floatingPnL.toFixed(2)),
+      floatingWinners,
+      floatingLosers,
+      scanIntervalMins,
+      guardianIntervalMins,
+      summary: {
+        tradesTaken: closedTrades + activeLedger.length,
+        closedTrades,
+        openTrades: activeLedger.length,
+        wins,
+        losses,
+        breakevens,
+        winRate,
+        netR: Number(netR.toFixed(2)),
+        avgR,
+        profitFactor,
+        dayR: Number(dailySummary.day_pnl_r || 0),
+        totalR: Number(dailySummary.total_r || 0),
+      },
+      activeSignals: activeLedger.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
+      recentClosed: [...closedLedger].sort((a, b) => new Date(b.closed_at || b.created_at) - new Date(a.closed_at || a.created_at)).slice(0, 20),
+      performance,
+      equityCurve,
+      priceMap,
+      config,
+      pairs,
+    };
+  }
+
   // ─── SIGNAL PIPELINE ──────────────────────────────────────────────────────
   async function processPipeline(symbol) {
     const scan = await brain1.scan(symbol);
@@ -275,6 +509,28 @@ async function boot() {
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
   });
 
+  app.get('/api/dashboard', async (req, res) => {
+    try {
+      const days = Math.max(30, Math.min(parseInt(req.query.days || '120', 10) || 120, 3650));
+      const historyLimit = Math.max(50, Math.min(parseInt(req.query.limit || '220', 10) || 220, 500));
+      const dashboard = await buildDashboard(days, historyLimit);
+      res.json({
+        success: true,
+        time: timeStatus(),
+        status: {
+          mode: process.env.PAPER_TRADE === 'false' ? 'LIVE' : 'PAPER',
+          ai: ai.mockMode ? 'MOCK' : 'LIVE',
+          telegram: telegramStatus(),
+          telegramError: telegram.authError,
+          marketDataProvider: process.env.MARKET_DATA_PROVIDER || 'auto',
+          livePolicy: livePolicyName,
+          livePairs,
+        },
+        dashboard,
+      });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  });
+
   app.get('/api/market/:symbol', async (req, res) => {
     try {
       const symbol = req.params.symbol.toUpperCase();
@@ -294,6 +550,30 @@ async function boot() {
           atr: h4.atr,
           adx: h4.adx,
         },
+      });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  });
+
+  app.get('/api/chart/:symbol', async (req, res) => {
+    try {
+      const symbol = req.params.symbol.toUpperCase();
+      const interval = String(req.query.interval || '15m');
+      const size = Math.max(24, Math.min(parseInt(req.query.size || '72', 10) || 72, 240));
+      const chart = await getCandleSnapshot(symbol, interval, size);
+      const candles = chart.candles?.candles || [];
+      res.json({
+        success: true,
+        symbol,
+        interval,
+        source: chart.source,
+        time: timeStatus(),
+        currentPrice: chart.price,
+        ema21: chart.candles?.ema21 ?? null,
+        ema50: chart.candles?.ema50 ?? null,
+        rsi: chart.candles?.rsi ?? null,
+        adx: chart.candles?.adx ?? null,
+        atr: chart.candles?.atr ?? null,
+        candles,
       });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
   });

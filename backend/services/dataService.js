@@ -44,6 +44,8 @@ class DataService {
         data = await this._polygonGet(symbol, interval, size);
       } else if (this.provider === 'twelve' && this.twelveKey) {
         data = await this._twelveGet(symbol, interval, size);
+      } else if (this.provider === 'auto' && this.twelveKey) {
+        data = await this._twelveGet(symbol, interval, size);
       } else if (this.taapiKey && this.provider !== 'polygon') {
         data = await this._taapiGet(symbol, interval, size);
       } else if (this.twelveKey) {

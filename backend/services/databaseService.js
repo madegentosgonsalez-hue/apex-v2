@@ -362,8 +362,10 @@ class DatabaseService {
         COUNT(*) as total_trades,
         COUNT(CASE WHEN outcome='WIN' THEN 1 END) as wins,
         COUNT(CASE WHEN outcome='LOSS' THEN 1 END) as losses,
-        ROUND(COUNT(CASE WHEN outcome='WIN' THEN 1 END)::float /
-          NULLIF(COUNT(CASE WHEN outcome IN ('WIN','LOSS') THEN 1 END),0)*100,1) as win_rate,
+        ROUND((
+          COUNT(CASE WHEN outcome='WIN' THEN 1 END)::numeric /
+          NULLIF(COUNT(CASE WHEN outcome IN ('WIN','LOSS') THEN 1 END),0)
+        ) * 100, 1) as win_rate,
         ROUND(SUM(pnl_r)::numeric,2) as total_r,
         ROUND(AVG(pnl_r)::numeric,2) as avg_r
       FROM signals
@@ -397,8 +399,10 @@ class DatabaseService {
       SELECT
         COUNT(CASE WHEN DATE(created_at)=CURRENT_DATE THEN 1 END) as signals_sent,
         COUNT(CASE WHEN DATE(created_at)=CURRENT_DATE AND outcome IS NOT NULL THEN 1 END) as trades_taken,
-        ROUND(COUNT(CASE WHEN DATE(created_at)=CURRENT_DATE AND outcome='WIN' THEN 1 END)::float /
-          NULLIF(COUNT(CASE WHEN DATE(created_at)=CURRENT_DATE AND outcome IN ('WIN','LOSS') THEN 1 END),0)*100,1) as win_rate,
+        ROUND((
+          COUNT(CASE WHEN DATE(created_at)=CURRENT_DATE AND outcome='WIN' THEN 1 END)::numeric /
+          NULLIF(COUNT(CASE WHEN DATE(created_at)=CURRENT_DATE AND outcome IN ('WIN','LOSS') THEN 1 END),0)
+        ) * 100, 1) as win_rate,
         ROUND(SUM(CASE WHEN DATE(created_at)=CURRENT_DATE THEN COALESCE(pnl_r,0) END)::numeric,2) as day_pnl_r,
         ROUND(SUM(COALESCE(pnl_r,0))::numeric,2) as total_r
       FROM signals
@@ -419,8 +423,10 @@ class DatabaseService {
     }
     const r = await this.query(`
       SELECT COUNT(*) as sample_size,
-        ROUND(COUNT(CASE WHEN outcome='WIN' THEN 1 END)::float /
-          NULLIF(COUNT(CASE WHEN outcome IN ('WIN','LOSS') THEN 1 END),0)*100,1) as win_rate,
+        ROUND((
+          COUNT(CASE WHEN outcome='WIN' THEN 1 END)::numeric /
+          NULLIF(COUNT(CASE WHEN outcome IN ('WIN','LOSS') THEN 1 END),0)
+        ) * 100, 1) as win_rate,
         ROUND(AVG(pnl_r)::numeric,2) as avg_r
       FROM signals WHERE symbol=$1 AND outcome IS NOT NULL
     `, [symbol]);
