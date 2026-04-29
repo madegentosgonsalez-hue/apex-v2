@@ -84,6 +84,30 @@ async function boot() {
     .split(',')
     .map((p) => p.trim().toUpperCase())
     .filter(Boolean);
+  const scanQueueEnabled = String(process.env.SCAN_QUEUE_ENABLED || 'true').toLowerCase() !== 'false';
+  const scanCadenceMs = Math.max(5000, Number(process.env.SCAN_CADENCE_MS || 15000));
+  const scanBudgetPerMinute = Math.max(1, Number(process.env.SCAN_BUDGET_PER_MINUTE || 8));
+  const scanCostPerPair = Math.max(1, Number(process.env.SCAN_COST_PER_PAIR || 2));
+  const scanErrorBackoffMs = Math.max(scanCadenceMs, Number(process.env.SCAN_ERROR_BACKOFF_MS || 30000));
+  const scanIdleMs = Math.max(5000, Number(process.env.SCAN_IDLE_MS || scanCadenceMs));
+  const scanState = {
+    enabled: scanQueueEnabled,
+    running: false,
+    timer: null,
+    queue: [],
+    cursor: 0,
+    currentSymbol: null,
+    lastSymbol: null,
+    lastOutcome: null,
+    lastError: null,
+    lastStartedAt: null,
+    lastFinishedAt: null,
+    lastDurationMs: null,
+    nextDueAt: null,
+    cycleCount: 0,
+    minuteWindowStartedAt: Date.now(),
+    minuteBudgetUsed: 0,
+  };
 
   async function syncLivePairs() {
     if (String(process.env.SYNC_LIVE_PAIRS || 'true').toLowerCase() === 'false') return;
@@ -128,6 +152,115 @@ async function boot() {
   function telegramStatus() {
     if (!telegram.active) return 'NOT_CONFIGURED';
     return telegram.authState || 'PENDING';
+  }
+
+  function refreshScanBudget(now = Date.now()) {
+    if (now - scanState.minuteWindowStartedAt >= 60000) {
+      scanState.minuteWindowStartedAt = now;
+      scanState.minuteBudgetUsed = 0;
+    }
+  }
+
+  function snapshotScanState() {
+    return {
+      enabled: scanState.enabled,
+      running: scanState.running,
+      currentSymbol: scanState.currentSymbol,
+      lastSymbol: scanState.lastSymbol,
+      lastOutcome: scanState.lastOutcome,
+      lastError: scanState.lastError,
+      lastStartedAt: scanState.lastStartedAt,
+      lastFinishedAt: scanState.lastFinishedAt,
+      lastDurationMs: scanState.lastDurationMs,
+      nextDueAt: scanState.nextDueAt,
+      cycleCount: scanState.cycleCount,
+      queue: [...scanState.queue],
+      queueLength: scanState.queue.length,
+      cursor: scanState.cursor,
+      cadenceMs: scanCadenceMs,
+      idleMs: scanIdleMs,
+      budgetPerMinute: scanBudgetPerMinute,
+      costPerPair: scanCostPerPair,
+      minuteBudgetUsed: scanState.minuteBudgetUsed,
+      minuteWindowStartedAt: new Date(scanState.minuteWindowStartedAt).toISOString(),
+    };
+  }
+
+  function scheduleScanTick(delayMs) {
+    if (!scanState.enabled) return;
+    if (scanState.timer) clearTimeout(scanState.timer);
+    const waitMs = Math.max(1000, Number(delayMs) || scanCadenceMs);
+    scanState.nextDueAt = new Date(Date.now() + waitMs).toISOString();
+    scanState.timer = setTimeout(() => {
+      scanState.timer = null;
+      runScanLoop().catch((err) => console.error('[ScanQueue]', err));
+    }, waitMs);
+  }
+
+  async function runScanLoop() {
+    if (!scanState.enabled || scanState.running) return;
+    scanState.running = true;
+    let nextDelay = scanCadenceMs;
+
+    try {
+      const pairs = await db.getActivePairs();
+      const symbols = pairs
+        .filter((pair) => pair.active)
+        .map((pair) => String(pair.symbol || '').toUpperCase())
+        .filter(Boolean);
+
+      scanState.queue = symbols;
+
+      if (!symbols.length) {
+        scanState.currentSymbol = null;
+        scanState.lastOutcome = 'IDLE_NO_PAIRS';
+        nextDelay = scanIdleMs;
+        return;
+      }
+
+      if (scanState.cursor >= symbols.length) scanState.cursor = 0;
+
+      const now = Date.now();
+      refreshScanBudget(now);
+
+      if (scanState.minuteBudgetUsed + scanCostPerPair > scanBudgetPerMinute) {
+        const waitForBudgetMs = Math.max(1000, 60000 - (now - scanState.minuteWindowStartedAt) + 250);
+        scanState.currentSymbol = null;
+        scanState.lastOutcome = 'WAITING_API_BUDGET';
+        nextDelay = waitForBudgetMs;
+        console.log(`[ScanQueue] Holding for API budget (${scanState.minuteBudgetUsed}/${scanBudgetPerMinute} used). Next tick in ${Math.ceil(waitForBudgetMs / 1000)}s.`);
+        return;
+      }
+
+      const symbol = symbols[scanState.cursor];
+      scanState.cursor = (scanState.cursor + 1) % symbols.length;
+      scanState.currentSymbol = symbol;
+      scanState.lastSymbol = symbol;
+      scanState.lastStartedAt = new Date().toISOString();
+      scanState.minuteBudgetUsed += scanCostPerPair;
+
+      const startedAt = Date.now();
+      const result = await processPipeline(symbol);
+      scanState.lastFinishedAt = new Date().toISOString();
+      scanState.lastDurationMs = Date.now() - startedAt;
+      scanState.lastOutcome = result?.stage || result?.reason || 'completed';
+      scanState.lastError = null;
+      scanState.cycleCount += 1;
+
+      console.log(`[ScanQueue] ${symbol} -> ${scanState.lastOutcome} (${scanState.lastDurationMs}ms, budget ${scanState.minuteBudgetUsed}/${scanBudgetPerMinute})`);
+      nextDelay = scanCadenceMs;
+    } catch (err) {
+      scanState.lastFinishedAt = new Date().toISOString();
+      scanState.lastDurationMs = scanState.lastStartedAt ? Date.now() - new Date(scanState.lastStartedAt).getTime() : null;
+      scanState.lastOutcome = 'ERROR';
+      scanState.lastError = err.message;
+      nextDelay = scanErrorBackoffMs;
+      console.error('[ScanQueue] Tick failed:', err.message);
+    } finally {
+      scanState.running = false;
+      scanState.currentSymbol = null;
+      scheduleScanTick(nextDelay);
+    }
   }
 
   function parseStoredValue(value) {
@@ -237,7 +370,9 @@ async function boot() {
     ]);
 
     const baseBalance = Number(config.demo_account_size || process.env.DEMO_ACCOUNT_SIZE || 50000);
-    const scanIntervalMins = Number(config.scan_interval_mins || 15);
+    const scanIntervalMins = scanQueueEnabled
+      ? Number((scanCadenceMs / 60000).toFixed(2))
+      : Number(config.scan_interval_mins || 15);
     const guardianIntervalMins = Number(config.guardian_interval_mins || 5);
     const trackedSymbols = [...new Set([...livePairs, ...activeSignals.map((signal) => signal.symbol)].filter(Boolean))];
     const trackedPrices = await Promise.all(trackedSymbols.map((symbol) => getCandleSnapshot(symbol, '15m', 2).catch(() => ({ symbol, price: null, source: 'unavailable' }))));
@@ -359,6 +494,7 @@ async function boot() {
       performance,
       equityCurve,
       priceMap,
+      scanQueue: snapshotScanState(),
       config,
       pairs,
     };
@@ -486,6 +622,7 @@ async function boot() {
     marketData: process.env.MARKET_DATA_PROVIDER || 'auto',
     livePolicy: livePolicyName,
     livePairs,
+    scanQueue: snapshotScanState(),
     uptimeSec: Math.round(process.uptime()),
   }));
 
@@ -504,6 +641,7 @@ async function boot() {
         livePolicy: livePolicyName,
         livePairs,
         activePairs: pairs.filter((p) => p.active).map((p) => p.symbol),
+        scanQueue: snapshotScanState(),
         uptimeSec: Math.round(process.uptime()),
       });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
@@ -525,6 +663,7 @@ async function boot() {
           marketDataProvider: process.env.MARKET_DATA_PROVIDER || 'auto',
           livePolicy: livePolicyName,
           livePairs,
+          scanQueue: snapshotScanState(),
         },
         dashboard,
       });
@@ -749,14 +888,18 @@ async function boot() {
 
   // ─── CRON JOBS ────────────────────────────────────────────────────────────
 
-  // Brain 1: every 15 minutes
-  cron.schedule('*/15 * * * *', async () => {
-    const pairs = await db.getActivePairs();
-    console.log(`\n[Cron] Brain1 scan — ${pairs.length} pairs`);
-    for (const p of pairs) {
-      await processPipeline(p.symbol).catch(console.error);
-    }
-  });
+  if (scanQueueEnabled) {
+    scheduleScanTick(2000);
+  } else {
+    // Fallback for explicit cron mode.
+    cron.schedule('*/15 * * * *', async () => {
+      const pairs = await db.getActivePairs();
+      console.log(`\n[Cron] Brain1 scan — ${pairs.length} pairs`);
+      for (const p of pairs) {
+        await processPipeline(p.symbol).catch(console.error);
+      }
+    });
+  }
 
   // Brain 2: every 5 minutes
   cron.schedule('*/5 * * * *', async () => {
@@ -825,7 +968,8 @@ async function boot() {
     console.log(`   Market Data: ${process.env.TAAPI_API_KEY || process.env.TWELVE_DATA_API_KEY || process.env.POLYGON_API_KEY ? `✅ Live (${process.env.MARKET_DATA_PROVIDER || 'auto'})` : '⚠️  Mock data (set TAAPI_API_KEY, TWELVE_DATA_API_KEY, or POLYGON_API_KEY)'}`);
     console.log(`   Mode       : ${process.env.PAPER_TRADE === 'false' ? '🔴 LIVE' : '📋 PAPER'}`);
     console.log('');
-    console.log('   Crons: Brain1 15min | Brain2 5min | News 30min');
+    console.log(`   Scan Loop  : ${scanQueueEnabled ? `Queue ${Math.round(scanCadenceMs / 1000)}s cadence | ${scanCostPerPair}/${scanBudgetPerMinute} budget` : 'Cron 15min burst'}`);
+    console.log('   Crons      : Brain2 5min | News 30min');
     console.log('');
     console.log('═══════════════════════════════════════');
     console.log(' All systems ready. Watching markets...');
