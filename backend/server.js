@@ -57,6 +57,7 @@ async function boot() {
     botToken: process.env.TELEGRAM_BOT_TOKEN,
     chatId:   process.env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_GROUP_ID,
   });
+  await telegram.validate();
   const whatsapp = new WhatsAppNotifier({
     accountSid: process.env.TWILIO_ACCOUNT_SID,
     authToken:  process.env.TWILIO_AUTH_TOKEN,
@@ -123,6 +124,11 @@ async function boot() {
   }
 
   await syncLivePairs();
+
+  function telegramStatus() {
+    if (!telegram.active) return 'NOT_CONFIGURED';
+    return telegram.authState || 'PENDING';
+  }
 
   // ─── SIGNAL PIPELINE ──────────────────────────────────────────────────────
   async function processPipeline(symbol) {
@@ -242,7 +248,7 @@ async function boot() {
     version: '3.0.0-demo',
     mode:    process.env.PAPER_TRADE === 'false' ? 'LIVE' : 'PAPER',
     ai:      ai.mockMode ? 'MOCK' : 'LIVE',
-    telegram: telegram.active ? 'CONNECTED' : 'NOT_CONFIGURED',
+    telegram: telegramStatus(),
     marketData: process.env.MARKET_DATA_PROVIDER || 'auto',
     livePolicy: livePolicyName,
     livePairs,
@@ -258,7 +264,8 @@ async function boot() {
         time: timeStatus(),
         mode: process.env.PAPER_TRADE === 'false' ? 'LIVE' : 'PAPER',
         ai: ai.mockMode ? 'MOCK' : 'LIVE',
-        telegram: telegram.active ? 'CONNECTED' : 'NOT_CONFIGURED',
+        telegram: telegramStatus(),
+        telegramError: telegram.authError,
         marketDataProvider: process.env.MARKET_DATA_PROVIDER || 'auto',
         livePolicy: livePolicyName,
         livePairs,
@@ -528,7 +535,13 @@ async function boot() {
     console.log('');
     console.log(`   Database   : ${process.env.DATABASE_URL ? '✅ PostgreSQL' : '⚠️  Memory (set DATABASE_URL)'}`);
     console.log(`   AI         : ${process.env.ANTHROPIC_API_KEY ? '✅ Claude API' : '⚠️  Mock mode (set ANTHROPIC_API_KEY)'}`);
-    console.log(`   Telegram   : ${telegram.active ? '✅ Connected' : '⚠️  Not configured (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)'}`);
+    const tgLine =
+      telegramStatus() === 'AUTHORIZED'
+        ? '✅ Authorized'
+        : telegramStatus() === 'AUTH_FAILED'
+          ? `❌ Auth failed (${telegram.authError})`
+          : '⚠️  Not configured (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)';
+    console.log(`   Telegram   : ${tgLine}`);
     console.log(`   Market Data: ${process.env.TAAPI_API_KEY || process.env.TWELVE_DATA_API_KEY || process.env.POLYGON_API_KEY ? `✅ Live (${process.env.MARKET_DATA_PROVIDER || 'auto'})` : '⚠️  Mock data (set TAAPI_API_KEY, TWELVE_DATA_API_KEY, or POLYGON_API_KEY)'}`);
     console.log(`   Mode       : ${process.env.PAPER_TRADE === 'false' ? '🔴 LIVE' : '📋 PAPER'}`);
     console.log('');

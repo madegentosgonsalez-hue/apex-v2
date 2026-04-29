@@ -6,6 +6,29 @@ class TelegramNotifier {
     this.chatId = chatId;
     this.base = botToken ? `https://api.telegram.org/bot${botToken}` : null;
     this.active = Boolean(botToken && chatId);
+    this.authState = this.active ? 'PENDING' : 'NOT_CONFIGURED';
+    this.authError = null;
+  }
+
+  async validate() {
+    if (!this.active) {
+      this.authState = 'NOT_CONFIGURED';
+      this.authError = null;
+      return { ok: false, reason: 'not_configured' };
+    }
+
+    try {
+      const res = await fetch(`${this.base}/getMe`);
+      const body = await res.json();
+      if (!body.ok) throw new Error(body.description || 'Telegram auth failed');
+      this.authState = 'AUTHORIZED';
+      this.authError = null;
+      return { ok: true, bot: body.result?.username || body.result?.id };
+    } catch (err) {
+      this.authState = 'AUTH_FAILED';
+      this.authError = err.message;
+      return { ok: false, error: err.message };
+    }
   }
 
   async send(text, type = 'MESSAGE') {
@@ -27,9 +50,13 @@ class TelegramNotifier {
       });
       const body = await res.json();
       if (!body.ok) throw new Error(body.description);
+      this.authState = 'AUTHORIZED';
+      this.authError = null;
       console.log(`[Telegram] Sent: ${type}`);
       return { sent: true, messageId: body.result?.message_id };
     } catch (err) {
+      this.authState = err.message === 'Unauthorized' ? 'AUTH_FAILED' : this.authState;
+      this.authError = err.message;
       console.error('[Telegram] Error:', err.message);
       return { sent: false, error: err.message };
     }
