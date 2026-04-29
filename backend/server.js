@@ -23,6 +23,11 @@ const { TelegramNotifier, WhatsAppNotifier, Notifier } = require('./notification
 const app  = express();
 const PORT = process.env.PORT || 3001;
 const TIER_RANK = { SKIP: 0, BRONZE: 1, SILVER: 2, GOLD: 3, DIAMOND: 4 };
+const TIER_RISK_PCT = { DIAMOND: 1.0, GOLD: 0.75, SILVER: 0.5, BRONZE: 0, SKIP: 0 };
+const CURRENCY_CAP_ENV = {
+  USD: 'MAX_CORRELATED_USD_TRADES',
+  JPY: 'MAX_CORRELATED_JPY_TRADES',
+};
 
 app.use(cors());
 app.use(express.json());
@@ -162,6 +167,56 @@ async function boot() {
     if (day === 6 || day === 0) return { allowed: false, reason: 'Weekend entry blocked' };
     if (day === 5 && mins >= cutoff) return { allowed: false, reason: 'Friday cutoff entry blocked' };
     return { allowed: true };
+  }
+
+  function parseBool(value, fallback = false) {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'boolean') return value;
+    return /^(1|true|yes|on)$/i.test(String(value));
+  }
+
+  function parsePair(symbol = '') {
+    const clean = String(symbol || '').toUpperCase();
+    if (clean.length === 6) return { base: clean.slice(0, 3), quote: clean.slice(3) };
+    if (clean === 'XAUUSD') return { base: 'XAU', quote: 'USD' };
+    return { base: clean.slice(0, 3) || clean, quote: clean.slice(-3) || 'USD' };
+  }
+
+  function currencyExposureVector(signal) {
+    const { base, quote } = parsePair(signal.symbol);
+    const dir = String(signal.direction || '').toUpperCase();
+    if (!['BUY', 'SELL'].includes(dir)) return {};
+    return dir === 'BUY'
+      ? { [base]: 1, [quote]: -1 }
+      : { [base]: -1, [quote]: 1 };
+  }
+
+  function exposureCount(trades, currency, side) {
+    return trades.filter((trade) => currencyExposureVector(trade)[currency] === side).length;
+  }
+
+  function sessionIdeaCount(trades, signal) {
+    return trades.filter((trade) =>
+      trade.symbol === signal.symbol &&
+      trade.session === signal.session &&
+      trade.direction === signal.direction
+    ).length;
+  }
+
+  function correlationExposureSummary(trades, signal) {
+    const nextVector = currencyExposureVector(signal);
+    const buckets = {};
+
+    for (const currency of Object.keys(CURRENCY_CAP_ENV)) {
+      const side = nextVector[currency];
+      if (!side) continue;
+      buckets[currency] = {
+        side,
+        existing: exposureCount(trades, currency, side),
+      };
+    }
+
+    return buckets;
   }
 
   function timeStatus() {
@@ -533,8 +588,12 @@ async function boot() {
 
     const config = await getParsedConfig();
     const maxOpenTrades = Number(config.max_open_trades || process.env.MAX_OPEN_TRADES || 5);
-    const maxEntriesPerPair = Number(config.max_entries_per_pair || process.env.MAX_ENTRIES_PER_PAIR || 1);
+    const maxEntriesPerPair = Number(config.max_entries_per_pair || process.env.MAX_ENTRIES_PER_PAIR || 2);
     const maxPortfolioRiskPct = Number(config.max_portfolio_risk_pct || process.env.MAX_PORTFOLIO_RISK_PCT || 5);
+    const oneIdeaPerPairSession = parseBool(
+      config.one_trade_idea_per_pair_session ?? process.env.ONE_TRADE_IDEA_PER_PAIR_PER_SESSION,
+      true
+    );
     const activeSignals = await db.getActiveSignals();
     const liveTrades = activeSignals.filter((row) => ['BUY', 'SELL'].includes(row.signal_type));
     const activeForPair = liveTrades.filter((row) => row.symbol === signal.symbol);
@@ -547,9 +606,23 @@ async function boot() {
     if (activeForPair.length >= maxEntriesPerPair) {
       return { allowed: false, reason: `${signal.symbol} already has ${activeForPair.length} open trade(s)` };
     }
+    if (oneIdeaPerPairSession && sessionIdeaCount(liveTrades, signal) > 0) {
+      return { allowed: false, reason: `${signal.symbol} already has an active ${signal.session} ${signal.direction} idea` };
+    }
     if (openRiskPct + nextRiskPct > maxPortfolioRiskPct) {
       return { allowed: false, reason: `Portfolio risk ${openRiskPct.toFixed(2)}% + ${nextRiskPct.toFixed(2)}% exceeds ${maxPortfolioRiskPct}%` };
     }
+
+    const correlation = correlationExposureSummary(liveTrades, signal);
+    for (const [currency, exposure] of Object.entries(correlation)) {
+      const envKey = CURRENCY_CAP_ENV[currency];
+      const cap = Number(config[`max_correlated_${currency.toLowerCase()}_trades`] || process.env[envKey] || 2);
+      if (exposure.existing >= cap) {
+        const label = exposure.side > 0 ? `long ${currency}` : `short ${currency}`;
+        return { allowed: false, reason: `Correlation cap hit: ${label} already has ${exposure.existing} open trade(s)` };
+      }
+    }
+
     return { allowed: true };
   }
 
@@ -604,9 +677,9 @@ async function boot() {
     // AI can only REDUCE the tier — never increase it.
     // This is the professional position-sizing gate.
     //
-    // Diamond: 6/6 + AI ≥88% → 2.0% risk  (exceptional — max size)
-    // Gold:    5/6 + AI ≥75% → 1.5% risk  (high confidence)
-    // Silver:  4/6 + AI ≥65% → 1.0% risk  (ready alert, standard size)
+    // Diamond: 6/6 + AI ≥88% → 1.0% risk
+    // Gold:    5/6 + AI ≥75% → 0.75% risk
+    // Silver:  4/6 + AI ≥65% → 0.5% risk
     //
     if (aiResp.decision !== 'REJECT') {
       const conviction = aiResp.conviction || 0;
@@ -614,21 +687,21 @@ async function boot() {
       if (signal.confidence_tier === 'DIAMOND' && conviction < 88) {
         // 6/6 confluence but AI not at max confidence → downgrade to Gold
         signal.confidence_tier = 'GOLD';
-        signal.risk_pct = 1.5;
+        signal.risk_pct = TIER_RISK_PCT.GOLD;
         console.log(`[Pipeline] ${symbol}: 💎→🥇 tier downgraded (conviction ${conviction}% < 88% required for Diamond)`);
       }
 
       if (signal.confidence_tier === 'GOLD' && conviction < 75) {
         // 5/6 or downgraded Diamond but AI not confident enough → Silver
         signal.confidence_tier = 'SILVER';
-        signal.risk_pct = 1.0;
+        signal.risk_pct = TIER_RISK_PCT.SILVER;
         console.log(`[Pipeline] ${symbol}: 🥇→🥈 tier downgraded (conviction ${conviction}% < 75% required for Gold)`);
       }
 
       if (signal.confidence_tier === 'SILVER' && conviction < 65) {
         // Should not happen (hard rule), but if AI barely approved → WAIT
         signal.confidence_tier = 'BRONZE';
-        signal.risk_pct = 0;
+        signal.risk_pct = TIER_RISK_PCT.BRONZE;
         console.log(`[Pipeline] ${symbol}: 🥈→🥉 tier downgraded (conviction ${conviction}% < 65%)`);
         aiResp.decision = 'REJECT'; // Force reject — not worth trading
       }
