@@ -69,6 +69,30 @@ Current open problems:
 - Claude validation is still too permissive and needs tighter rejection behavior
 - The strategy is improved materially, but it has not yet demonstrated the 10% to 15% monthly target on this research set
 
+Target-growth update:
+
+- `target_growth_v1`:
+  - profile: `v2_relaxed`
+  - mixed providers: Polygon forex + Twelve Data XAUUSD
+  - pair-specific H4 scan windows
+  - monthly module guards for weak drawdown pockets
+  - approximately `15.12` signals/month
+  - approximately `188.21R`
+  - approximately `10.16%` simple monthly growth using blueprint tier risks
+
+- `target_growth_v2`:
+  - same rules as v1, but `GBPJPY` gets a wider 90-minute post-H4 window
+  - approximately `17.12` signals/month
+  - approximately `205.18R`
+  - approximately `10.87%` simple monthly growth using blueprint tier risks
+  - best current candidate for the signal-volume goal
+
+Current target gap:
+
+- Signal goal `15-20/month`: reached by `target_growth_v1` and `target_growth_v2`
+- Profit goal `13-18%/month`: not reached yet under current blueprint risk
+- The remaining gap needs either stronger expectancy, more high-quality XAUUSD data, or an explicit risk-model decision after validation.
+
 Important backtest fidelity fixes now implemented in code:
 
 - weekly candles aligned to Monday instead of Unix-epoch week buckets
@@ -76,3 +100,5 @@ Important backtest fidelity fixes now implemented in code:
 - real `M15/M30` aggregation path for Polygon forex data
 - optional repo-local historical caching
 - optional same-pair concurrent research mode
+- optional pair-specific post-H4 scan windows
+- optional forward-only monthly pair/module drawdown guard

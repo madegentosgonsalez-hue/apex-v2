@@ -505,6 +505,28 @@ class Backtester {
     return { allowed: true };
   }
 
+  _monthlyPairGuard(signal, trades) {
+    const policy = this.pairPolicy[signal.symbol] || {};
+    const maxLossR = Number(policy.maxMonthlyLossR || 0);
+    const maxLosses = Number(policy.maxMonthlyLosses || 0);
+    if (!maxLossR && !maxLosses) return { allowed: true };
+
+    const monthTrades = trades.filter((trade) => (
+      trade.symbol === signal.symbol && trade.month === signal.month
+    ));
+    if (!monthTrades.length) return { allowed: true };
+
+    const monthR = monthTrades.reduce((sum, trade) => sum + trade.r, 0);
+    const losses = monthTrades.filter((trade) => trade.r <= 0).length;
+    if (maxLossR && monthR <= -Math.abs(maxLossR)) {
+      return { allowed: false, reason: `${signal.symbol} monthly R guard` };
+    }
+    if (maxLosses && losses >= maxLosses) {
+      return { allowed: false, reason: `${signal.symbol} monthly loss-count guard` };
+    }
+    return { allowed: true };
+  }
+
   async _applySignalOverlay(signal, trades) {
     if (!this.ai) {
       return { accepted: true, signal };
@@ -610,9 +632,11 @@ class Backtester {
     };
   }
 
-  _isFreshH4Scan(ts) {
+  _isFreshH4Scan(ts, symbol) {
+    const policy = this.pairPolicy?.[symbol] || {};
+    const windowMinutes = Number(policy.h4ScanWindowMinutes || this.researchOptions.h4ScanWindowMinutes || 30);
     const utcMins = ts.getUTCHours() * 60 + ts.getUTCMinutes();
-    return (utcMins % 240) <= 30;
+    return (utcMins % 240) <= windowMinutes;
   }
 
   // ── BRAIN1 ANALYSIS ON HISTORICAL SNAPSHOT ─────────────────────────────
@@ -853,6 +877,12 @@ class Backtester {
         return;
       }
 
+      const monthlyGuard = this._monthlyPairGuard(signal, trades);
+      if (!monthlyGuard.allowed) {
+        skips.monthlyGuard = (skips.monthlyGuard || 0) + 1;
+        return;
+      }
+
       signals.push(signal);
 
       const futureH4 = h4.slice(h4Index + 1, h4Index + 501);
@@ -898,7 +928,7 @@ class Backtester {
 
         while (closedH4End < h4.length - 2 && tsOf(h4, closedH4End + 2) <= scanMs) closedH4End++;
         if (closedH4End < H4_WARMUP) continue;
-        if (!this._isFreshH4Scan(scanTs)) continue;
+        if (!this._isFreshH4Scan(scanTs, symbol)) continue;
 
         if (enforceSingleTradeLock && tradeEndTime && scanMs <= tradeEndTime) {
           skips.inTrade++;

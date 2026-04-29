@@ -84,6 +84,28 @@ const POLICIES = {
     EURJPY: { allowedEntryTypes: ['TYPE_B'], minTier: 'GOLD' },
     XAUUSD: { sessions: ['NEW_YORK', 'OVERLAP'], allowedEntryTypes: ['TYPE_A', 'TYPE_B'] },
   },
+  target_growth_v1: {
+    GBPUSD: { disabled: true },
+    USDCAD: { disabled: true },
+    AUDUSD: { disabled: true },
+    USDJPY: { disabled: true },
+    EURUSD: { sessions: ['NEW_YORK', 'OVERLAP'], allowedEntryTypes: ['TYPE_B'], h4ScanWindowMinutes: 60, maxMonthlyLossR: 4 },
+    USDCHF: { allowedEntryTypes: ['TYPE_A', 'TYPE_B'], minTier: 'GOLD', h4ScanWindowMinutes: 60 },
+    GBPJPY: { allowedEntryTypes: ['TYPE_B'], h4ScanWindowMinutes: 60, maxMonthlyLossR: 8 },
+    EURJPY: { allowedEntryTypes: ['TYPE_A'], minTier: 'GOLD', h4ScanWindowMinutes: 120, maxMonthlyLossR: 6 },
+    XAUUSD: { sessions: ['NEW_YORK', 'OVERLAP'], allowedEntryTypes: ['TYPE_A', 'TYPE_B'] },
+  },
+  target_growth_v2: {
+    GBPUSD: { disabled: true },
+    USDCAD: { disabled: true },
+    AUDUSD: { disabled: true },
+    USDJPY: { disabled: true },
+    EURUSD: { sessions: ['NEW_YORK', 'OVERLAP'], allowedEntryTypes: ['TYPE_B'], h4ScanWindowMinutes: 60, maxMonthlyLossR: 4 },
+    USDCHF: { allowedEntryTypes: ['TYPE_A', 'TYPE_B'], minTier: 'GOLD', h4ScanWindowMinutes: 60 },
+    GBPJPY: { allowedEntryTypes: ['TYPE_B'], h4ScanWindowMinutes: 90, maxMonthlyLossR: 8 },
+    EURJPY: { allowedEntryTypes: ['TYPE_A'], minTier: 'GOLD', h4ScanWindowMinutes: 120, maxMonthlyLossR: 6 },
+    XAUUSD: { sessions: ['NEW_YORK', 'OVERLAP'], allowedEntryTypes: ['TYPE_A', 'TYPE_B'] },
+  },
 };
 
 function getPairPolicy(name = 'none') {
