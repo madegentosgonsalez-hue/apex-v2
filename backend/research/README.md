@@ -18,6 +18,23 @@ Current leadership by pair under `balanced + real15m_growth + concurrent`:
 - `USDCHF`: strong edge, high win rate, lower volume than GBPJPY
 - `EURUSD`: useful volume source, but expectancy is weak and needs better filtering
 
+Mixed-provider update:
+
+- `XAUUSD` restored through Twelve Data
+- `XAUUSD` performs much better in `NEW_YORK/OVERLAP` only than full-session trading
+- current mixed basket candidate:
+  - `GBPJPY`
+  - `USDCHF`
+  - `XAUUSD` (`NEW_YORK/OVERLAP`)
+  - `EURUSD` (`NEW_YORK/OVERLAP`)
+
+Current mixed-basket 1-year result:
+
+- approximately `56.48R`
+- approximately `5.0` signals/month
+- best contributors remain `GBPJPY`, `USDCHF`, and `XAUUSD`
+- `EURUSD` is still the weakest active contributor, but improves when London is removed
+
 Current removals:
 
 - `GBPUSD`: disabled

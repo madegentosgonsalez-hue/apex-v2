@@ -8,6 +8,7 @@
     "dev": "node --watch server.js",
     "backtest": "node backtest.js",
     "research:matrix": "node scripts/research-matrix.js",
+    "research:mixed": "node scripts/research-mixed-portfolio.js",
     "test": "node test/strategy.test.js"
   },
   "dependencies": {

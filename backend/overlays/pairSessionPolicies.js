@@ -42,6 +42,15 @@ const POLICIES = {
     USDJPY: { disabled: true },
     EURJPY: { sessions: ['OVERLAP'] },
   },
+  mixed_growth_v1: {
+    GBPUSD: { disabled: true },
+    USDCAD: { disabled: true },
+    AUDUSD: { disabled: true },
+    USDJPY: { disabled: true },
+    EURJPY: { disabled: true },
+    EURUSD: { sessions: ['NEW_YORK', 'OVERLAP'] },
+    XAUUSD: { sessions: ['NEW_YORK', 'OVERLAP'] },
+  },
 };
 
 function getPairPolicy(name = 'none') {
