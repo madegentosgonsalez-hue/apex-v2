@@ -501,6 +501,31 @@ async function boot() {
   }
 
   // ─── SIGNAL PIPELINE ──────────────────────────────────────────────────────
+  async function executionGate(signal, sigType) {
+    if (!['BUY', 'SELL'].includes(sigType)) return { allowed: true };
+
+    const config = await getParsedConfig();
+    const maxOpenTrades = Number(config.max_open_trades || process.env.MAX_OPEN_TRADES || 5);
+    const maxEntriesPerPair = Number(config.max_entries_per_pair || process.env.MAX_ENTRIES_PER_PAIR || 1);
+    const maxPortfolioRiskPct = Number(config.max_portfolio_risk_pct || process.env.MAX_PORTFOLIO_RISK_PCT || 5);
+    const activeSignals = await db.getActiveSignals();
+    const liveTrades = activeSignals.filter((row) => ['BUY', 'SELL'].includes(row.signal_type));
+    const activeForPair = liveTrades.filter((row) => row.symbol === signal.symbol);
+    const openRiskPct = liveTrades.reduce((sum, row) => sum + Number(row.risk_pct || 0), 0);
+    const nextRiskPct = Number(signal.risk_pct || 0);
+
+    if (liveTrades.length >= maxOpenTrades) {
+      return { allowed: false, reason: `Max open trades ${maxOpenTrades} reached` };
+    }
+    if (activeForPair.length >= maxEntriesPerPair) {
+      return { allowed: false, reason: `${signal.symbol} already has ${activeForPair.length} open trade(s)` };
+    }
+    if (openRiskPct + nextRiskPct > maxPortfolioRiskPct) {
+      return { allowed: false, reason: `Portfolio risk ${openRiskPct.toFixed(2)}% + ${nextRiskPct.toFixed(2)}% exceeds ${maxPortfolioRiskPct}%` };
+    }
+    return { allowed: true };
+  }
+
   async function processPipeline(symbol) {
     const scan = await brain1.scan(symbol);
     if (!scan.signal) return { sent: false, symbol, stage: 'brain1', reason: scan.reason || 'No signal' };
@@ -583,6 +608,17 @@ async function boot() {
     }
 
     signal.signal_type = sigType;
+
+    const gate = await executionGate(signal, sigType);
+    if (!gate.allowed) {
+      signal.signal_type = 'NO_TRADE';
+      signal.ai_decision = 'REJECT';
+      signal.ai_reasoning = `${signal.ai_reasoning || 'Execution blocked.'} Execution gate: ${gate.reason}`;
+      signal.ai_risk_flags = [...new Set([...(signal.ai_risk_flags || []), 'EXECUTION_GATE'])];
+      const savedBlocked = await db.saveSignal(signal);
+      console.log(`[Pipeline] ${symbol}: execution gate blocked - ${gate.reason}`);
+      return { sent: false, symbol, stage: 'execution-gate', reason: gate.reason, signal: savedBlocked, ai: aiResp };
+    }
 
     // Save FIRST — now signal gets a real DB id
     const saved = await db.saveSignal(signal);

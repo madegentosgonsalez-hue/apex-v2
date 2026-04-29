@@ -53,6 +53,8 @@ class Backtester {
     this.researchOptions = {
       allowConcurrentTrades: false,
       syntheticIntermarket: false,
+      timeStopHours: 72,
+      timeStopMinR: 0.5,
       ...(researchOptions || {}),
     };
     this._contextDailyCache = new Map();
@@ -774,6 +776,9 @@ class Backtester {
     const isBuy  = dir === 'BUY';
     const risk   = Math.abs(entry - sl);
     if (!risk) return null;
+    const timeStopHours = Math.max(0, Number(this.researchOptions.timeStopHours || 0));
+    const timeStopMinR = Number(this.researchOptions.timeStopMinR || 0);
+    const entryMs = new Date(signal.timestamp).getTime();
 
     let lot1Done = false, lot2Done = false, lot3Done = false;
     let beActive = false;
@@ -783,6 +788,8 @@ class Backtester {
 
     for (const c of futureH4) {
       const hi = c.high, lo = c.low;
+      const elapsedHours = entryMs ? ((new Date(c.datetime).getTime() - entryMs) / 36e5) : 0;
+      const closeR = isBuy ? (c.close - entry) / risk : (entry - c.close) / risk;
 
       // SL check (priority over TP)
       const slHit = isBuy ? lo <= (beActive ? entry : sl) : hi >= (beActive ? entry : sl);
@@ -823,6 +830,10 @@ class Backtester {
         lot3Done = true;
         totalR += 0.2 * 3;
         return { r: parseFloat(totalR.toFixed(2)), exitReason: 'FULL_TP', exitTime: c.datetime, exitPrice: tp2 };
+      }
+
+      if (timeStopHours > 0 && elapsedHours >= timeStopHours && !lot1Done && closeR < timeStopMinR) {
+        return { r: parseFloat(closeR.toFixed(2)), exitReason: 'TIME_STOP', exitTime: c.datetime, exitPrice: c.close };
       }
     }
 

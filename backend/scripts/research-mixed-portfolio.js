@@ -9,6 +9,7 @@ const Backtester = require('../backtest');
 const DataService = require('../services/dataService');
 const { getPairPolicy } = require('../overlays/pairSessionPolicies');
 const { getStrategyProfile } = require('../overlays/strategyProfiles');
+const { simulatePortfolio } = require('../research/portfolioSimulator');
 
 const polygonData = new DataService({
   taapiKey: process.env.TAAPI_API_KEY,
@@ -44,6 +45,11 @@ async function main() {
   const allowConcurrentTrades = /^(1|true|yes)$/i.test(String(process.env.RESEARCH_ALLOW_CONCURRENT || 'true'));
   const syntheticIntermarket = /^(1|true|yes)$/i.test(String(process.env.RESEARCH_SYNTHETIC_INTERMARKET || 'false'));
   const h4ScanWindowMinutes = Number(process.env.RESEARCH_H4_SCAN_WINDOW_MINUTES || 30);
+  const timeStopHours = Number(process.env.RESEARCH_TIME_STOP_HOURS || 72);
+  const timeStopMinR = Number(process.env.RESEARCH_TIME_STOP_MIN_R || 0.5);
+  const maxConcurrentTrades = Number(process.env.RESEARCH_MAX_CONCURRENT_TRADES || 5);
+  const maxEntriesPerPair = Number(process.env.RESEARCH_MAX_ENTRIES_PER_PAIR || 2);
+  const executionDragR = Number(process.env.RESEARCH_EXECUTION_DRAG_R || 0.15);
 
   const strategyProfile = getStrategyProfile(profileName);
   const pairPolicy = getPairPolicy(policyName);
@@ -56,7 +62,7 @@ async function main() {
       dataService: dataForProvider(provider),
       strategyProfile,
       pairPolicy,
-      researchOptions: { allowConcurrentTrades, syntheticIntermarket, h4ScanWindowMinutes },
+      researchOptions: { allowConcurrentTrades, syntheticIntermarket, h4ScanWindowMinutes, timeStopHours, timeStopMinR },
     });
     console.log(`[Mixed Research] Building ${symbol} bundle via ${provider}...`);
     bundles.set(symbol, await builder._buildSeriesBundle(symbol, yearsBack));
@@ -70,7 +76,7 @@ async function main() {
       dataService: dataForProvider(provider),
       strategyProfile,
       pairPolicy,
-      researchOptions: { allowConcurrentTrades, syntheticIntermarket, h4ScanWindowMinutes },
+      researchOptions: { allowConcurrentTrades, syntheticIntermarket, h4ScanWindowMinutes, timeStopHours, timeStopMinR },
     });
     const report = await bt.runBacktest(symbol, yearsBack, null, null, bundles.get(symbol));
     results.push({
@@ -121,6 +127,12 @@ async function main() {
     winRate: stats.trades ? Number((stats.wins / stats.trades * 100).toFixed(1)) : 0,
     totalR: Number(stats.totalR.toFixed(2)),
   }]));
+  const constrainedPortfolio = simulatePortfolio(results, {
+    startingBalance: Number(process.env.RESEARCH_STARTING_BALANCE || 1000),
+    maxConcurrentTrades,
+    maxEntriesPerPair,
+    executionDragR,
+  });
 
   const outputDir = path.join(__dirname, '..', 'research', 'results');
   fs.mkdirSync(outputDir, { recursive: true });
@@ -134,12 +146,18 @@ async function main() {
     allowConcurrentTrades,
     syntheticIntermarket,
     h4ScanWindowMinutes,
+    timeStopHours,
+    timeStopMinR,
+    maxConcurrentTrades,
+    maxEntriesPerPair,
+    executionDragR,
     pairs,
     results,
     portfolio,
+    constrainedPortfolio,
   }, null, 2));
 
-  console.log(JSON.stringify({ outputPath, portfolio, results }, null, 2));
+  console.log(JSON.stringify({ outputPath, portfolio, constrainedPortfolio, results }, null, 2));
 }
 
 main().catch((err) => {

@@ -15,6 +15,7 @@ class Brain2 {
     this.news     = newsService; // NEW-04 FIX: wire in news service
     // NEW-08 FIX: deduplication map — track last alert level per signal id
     this.lastAlertLevel = new Map(); // signalId → level name
+    this.ageAlertLevel = new Map(); // signalId → age stage
   }
 
   async monitorAll() {
@@ -48,6 +49,19 @@ class Brain2 {
 
       // Check SL (CANDLE CLOSE rule)
       if (this._slHit(signal, mkt)) { await this._onSL(signal, mkt.currentPrice); return; }
+
+      const stale = this._staleTradeCheck(signal, mkt.currentPrice);
+      if (stale.action === 'EXIT') {
+        await this._onTimeStop(signal, mkt.currentPrice, stale);
+        return;
+      }
+      if (stale.action === 'WARN') {
+        const stageKey = `${stale.stage}`;
+        if (this.ageAlertLevel.get(signal.id) !== stageKey) {
+          this.ageAlertLevel.set(signal.id, stageKey);
+          await this.notifier.send(this._fmt(signal, '⏳ STALE TRADE', stale.reason, mkt.currentPrice), 'UPDATE');
+        }
+      }
 
       // Expire
       if (signal.status === 'ACTIVE' && new Date() > new Date(signal.valid_until)) {
@@ -239,6 +253,7 @@ ${tpGuide ? `━━━━━━━━━━━━━━━━━━━━━━�
   // ── SL HIT HANDLER ── FIX BUG-06: calculate actual pnlR, don't hardcode -1.0
   // SL may have been moved to breakeven → pnlR = 0 not -1.0
   async _onSL(signal, price) {
+    this.ageAlertLevel.delete(signal.id);
     const risk  = Math.abs(signal.entry_price - signal.stop_loss);
     const dir   = signal.direction === 'BUY' ? 1 : -1;
     // FIX BUG-05: use parseFloat to ensure number not string
@@ -258,6 +273,7 @@ Composure. Next setup.`;
   }
 
   async _onEmergency(signal, price, reason) {
+    this.ageAlertLevel.delete(signal.id);
     await this.db.closeSignal(signal.id, price, 'EMERGENCY_EXIT', null);
     const msg = `🚨 EMERGENCY EXIT — ${signal.symbol}
 ━━━━━━━━━━━━━━━━━━━━━━━
@@ -269,8 +285,26 @@ EXIT IMMEDIATELY. No hesitation.`;
   }
 
   async _onExpire(signal) {
+    this.ageAlertLevel.delete(signal.id);
     await this.db.closeSignal(signal.id, null, 'EXPIRED', null);
     await this.notifier.send(`⏱ SIGNAL EXPIRED — ${signal.symbol}\nEntry never triggered within validity window.\nArchived for learning.`, 'UPDATE');
+  }
+
+  async _onTimeStop(signal, price, stale) {
+    this.ageAlertLevel.delete(signal.id);
+    const risk = Math.abs(signal.entry_price - signal.stop_loss);
+    const dir = signal.direction === 'BUY' ? 1 : -1;
+    const pnlR = risk > 0 ? parseFloat((((price - signal.entry_price) * dir) / risk).toFixed(2)) : 0;
+    await this.db.closeSignal(signal.id, price, 'TIME_STOP', pnlR);
+    const msg = `⏳ TIME STOP — ${signal.symbol}
+━━━━━━━━━━━━━━━━━━━━━━━
+Age      : ${stale.ageHours.toFixed(1)}h
+Current  : ${price}
+Result   : ${pnlR >= 0 ? '+' : ''}${pnlR.toFixed(2)}R
+Reason   : ${stale.reason}
+━━━━━━━━━━━━━━━━━━━━━━━
+Closing stale exposure to protect consistency and swap.`;
+    await this.notifier.send(msg, 'UPDATE');
   }
 
   // ── TP CHECK ─────────────────────────────────────────────────────────────
@@ -309,6 +343,43 @@ EXIT IMMEDIATELY. No hesitation.`;
   }
 
   // ── FORMAT MESSAGE ── FIX BUG-05: parseFloat pnlR so > 0 comparison works
+  _staleTradeCheck(signal, currentPrice) {
+    if (!signal?.created_at || signal.status !== 'ACTIVE') return { action: 'NONE' };
+    const ageMs = Date.now() - new Date(signal.created_at).getTime();
+    if (!Number.isFinite(ageMs) || ageMs <= 0) return { action: 'NONE' };
+
+    const timeStopHours = Math.max(24, Number(process.env.TIME_STOP_HOURS || 72));
+    const warnHours = Math.max(24, Number(process.env.TIME_STOP_WARN_HOURS || Math.max(24, timeStopHours / 2)));
+    const timeStopMinR = Number(process.env.TIME_STOP_MIN_R || 0.5);
+    const warnMinR = Number(process.env.TIME_STOP_WARN_MIN_R || 0.25);
+    const ageHours = ageMs / 36e5;
+    const risk = Math.abs(signal.entry_price - signal.stop_loss);
+    const dir = signal.direction === 'BUY' ? 1 : -1;
+    const currentR = risk > 0 ? ((currentPrice - signal.entry_price) * dir) / risk : 0;
+
+    if (ageHours >= timeStopHours && currentR < timeStopMinR) {
+      return {
+        action: 'EXIT',
+        stage: 'EXIT',
+        ageHours,
+        currentR,
+        reason: `Open ${ageHours.toFixed(1)}h with only ${currentR.toFixed(2)}R progress (< ${timeStopMinR}R).`,
+      };
+    }
+
+    if (ageHours >= warnHours && currentR < warnMinR) {
+      return {
+        action: 'WARN',
+        stage: 'WARN',
+        ageHours,
+        currentR,
+        reason: `Open ${ageHours.toFixed(1)}h with weak progress (${currentR.toFixed(2)}R).`,
+      };
+    }
+
+    return { action: 'NONE' };
+  }
+
   _fmt(signal, status, reason, price) {
     const risk  = Math.abs(signal.entry_price - signal.stop_loss);
     const dir   = signal.direction === 'BUY' ? 1 : -1;
