@@ -51,10 +51,10 @@ async function main() {
     researchOptions: {
       allowConcurrentTrades: true,
       syntheticIntermarket: /^(1|true|yes)$/i.test(String(process.env.RESEARCH_SYNTHETIC_INTERMARKET || 'false')),
-      scalpTimeStopHours: Number(process.env.RESEARCH_SCALP_TIME_STOP_HOURS || 12),
+      scalpTimeStopHours: Number(process.env.RESEARCH_SCALP_TIME_STOP_HOURS || 10),
       scalpMaxHoldBars: Number(process.env.RESEARCH_SCALP_MAX_HOLD_BARS || 96),
       scalpCooldownBars: Number(process.env.RESEARCH_SCALP_COOLDOWN_BARS || 8),
-      scalpMinR: Number(process.env.RESEARCH_SCALP_MIN_R || 1.6),
+      scalpMinR: Number(process.env.RESEARCH_SCALP_MIN_R || 1.5),
     },
   });
 

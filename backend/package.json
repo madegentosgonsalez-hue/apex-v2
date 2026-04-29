@@ -10,6 +10,7 @@
     "research:matrix": "node scripts/research-matrix.js",
     "research:mixed": "node scripts/research-mixed-portfolio.js",
     "research:scalp": "node scripts/research-scalp-continuation.js",
+    "research:range": "node scripts/research-range-reversion.js",
     "test": "node test/strategy.test.js"
   },
   "dependencies": {
