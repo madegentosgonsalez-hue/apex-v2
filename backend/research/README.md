@@ -35,6 +35,27 @@ Current mixed-basket 1-year result:
 - best contributors remain `GBPJPY`, `USDCHF`, and `XAUUSD`
 - `EURUSD` is still the weakest active contributor, but improves when London is removed
 
+2-year mixed-basket progress:
+
+- `mixed_growth_v3`:
+  - approximately `77.35R`
+  - approximately `11.97` signals/month
+  - higher-volume candidate
+
+- `mixed_growth_v4`:
+  - approximately `79.47R`
+  - approximately `8.25` signals/month
+  - approximately `48.5%` overall win rate
+  - higher-quality candidate
+
+Key 2-year findings:
+
+- `GBPJPY` improves when reduced to `TYPE_B` only
+- `EURJPY` becomes useful when kept to `TYPE_B` and `GOLD`
+- `USDCHF` improves materially at `GOLD+`
+- `XAUUSD` remains strongest in `NEW_YORK/OVERLAP` with `TYPE_A/TYPE_B`
+- `EURUSD` is still the weakest active component and remains the main candidate for future refinement or removal
+
 Current removals:
 
 - `GBPUSD`: disabled
