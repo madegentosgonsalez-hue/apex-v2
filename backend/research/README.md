@@ -85,13 +85,25 @@ Target-growth update:
   - approximately `17.12` signals/month
   - approximately `205.18R`
   - approximately `10.87%` simple monthly growth using blueprint tier risks
-  - best current candidate for the signal-volume goal
+  - first candidate to fully satisfy the signal-volume goal
+
+- `target_growth_v6`:
+  - profile: `v2_relaxed`
+  - mixed providers: Polygon forex + Twelve Data XAUUSD
+  - `USDCHF`: blocks ranging-regime order-block trades
+  - `GBPJPY`: widened 120-minute post-H4 window, blocks SELL direction
+  - `EURJPY`: keeps `TYPE_A` but blocks order-block entries in ranging/trending regimes; FVG and weak-trend order-blocks remain active
+  - approximately `15.67` signals/month
+  - approximately `255.41R`
+  - approximately `54.0%` win rate
+  - approximately `13.50%` simple monthly growth using blueprint tier risks
+  - current target-growth candidate
 
 Current target gap:
 
-- Signal goal `15-20/month`: reached by `target_growth_v1` and `target_growth_v2`
-- Profit goal `13-18%/month`: not reached yet under current blueprint risk
-- The remaining gap needs either stronger expectancy, more high-quality XAUUSD data, or an explicit risk-model decision after validation.
+- Signal goal `15-20/month`: reached by `target_growth_v1`, `target_growth_v2`, and `target_growth_v6`
+- Profit goal `13-18%/month`: reached by `target_growth_v6` in the 2-year simple tier-risk research model
+- Remaining live-trading risk: the margin above 13% is still thin after slippage/spread/model decay, so the next research priority is more high-quality XAUUSD volume or broader cached 2-year data for replacement pairs.
 
 Important backtest fidelity fixes now implemented in code:
 
@@ -102,3 +114,5 @@ Important backtest fidelity fixes now implemented in code:
 - optional same-pair concurrent research mode
 - optional pair-specific post-H4 scan windows
 - optional forward-only monthly pair/module drawdown guard
+- optional policy filters by UTC hour, direction, regime, level type, and level/regime combinations
+- expanded research diagnostics by direction, regime, exit reason, ADX bucket, session/hour, level/direction, and full trade log

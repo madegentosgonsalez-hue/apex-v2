@@ -479,6 +479,28 @@ class Backtester {
       return { allowed: false, reason: `${signal.symbol} restricted to ${policy.sessions.join('/')}` };
     }
 
+    if (Array.isArray(policy.allowedRegimes) && policy.allowedRegimes.length > 0 && !policy.allowedRegimes.includes(signal.regime)) {
+      return { allowed: false, reason: `${signal.symbol} only allows ${policy.allowedRegimes.join('/')}` };
+    }
+
+    if (Array.isArray(policy.blockedRegimes) && policy.blockedRegimes.includes(signal.regime)) {
+      return { allowed: false, reason: `${signal.symbol} blocks ${signal.regime}` };
+    }
+
+    if (Array.isArray(policy.allowedHoursUTC) && policy.allowedHoursUTC.length > 0) {
+      const hour = new Date(signal.timestamp).getUTCHours();
+      if (!policy.allowedHoursUTC.includes(hour)) {
+        return { allowed: false, reason: `${signal.symbol} only allows configured UTC hours` };
+      }
+    }
+
+    if (Array.isArray(policy.blockedHoursUTC) && policy.blockedHoursUTC.length > 0) {
+      const hour = new Date(signal.timestamp).getUTCHours();
+      if (policy.blockedHoursUTC.includes(hour)) {
+        return { allowed: false, reason: `${signal.symbol} blocks configured UTC hours` };
+      }
+    }
+
     if (policy.minTier && TIER_RANK[signal.confidence_tier] < TIER_RANK[policy.minTier]) {
       return { allowed: false, reason: `${signal.symbol} requires ${policy.minTier}+` };
     }
@@ -487,12 +509,35 @@ class Backtester {
       return { allowed: false, reason: `${signal.symbol} requires confluence ${policy.minConfluence}+` };
     }
 
+    if (Array.isArray(policy.allowedDirections) && policy.allowedDirections.length > 0 && !policy.allowedDirections.includes(signal.direction)) {
+      return { allowed: false, reason: `${signal.symbol} only allows ${policy.allowedDirections.join('/')}` };
+    }
+
+    if (Array.isArray(policy.blockedDirections) && policy.blockedDirections.includes(signal.direction)) {
+      return { allowed: false, reason: `${signal.symbol} blocks ${signal.direction}` };
+    }
+
     if (Array.isArray(policy.allowedEntryTypes) && policy.allowedEntryTypes.length > 0 && !policy.allowedEntryTypes.includes(signal.entry_type)) {
       return { allowed: false, reason: `${signal.symbol} only allows ${policy.allowedEntryTypes.join('/')}` };
     }
 
     if (Array.isArray(policy.blockedEntryTypes) && policy.blockedEntryTypes.includes(signal.entry_type)) {
       return { allowed: false, reason: `${signal.symbol} blocks ${signal.entry_type}` };
+    }
+
+    if (Array.isArray(policy.allowedLevelTypes) && policy.allowedLevelTypes.length > 0 && !policy.allowedLevelTypes.includes(signal.level_type)) {
+      return { allowed: false, reason: `${signal.symbol} only allows ${policy.allowedLevelTypes.join('/')}` };
+    }
+
+    if (Array.isArray(policy.blockedLevelTypes) && policy.blockedLevelTypes.includes(signal.level_type)) {
+      return { allowed: false, reason: `${signal.symbol} blocks ${signal.level_type}` };
+    }
+
+    if (policy.blockedLevelRegimes && Array.isArray(policy.blockedLevelRegimes[signal.level_type])) {
+      const blockedRegimes = policy.blockedLevelRegimes[signal.level_type];
+      if (blockedRegimes.includes(signal.regime)) {
+        return { allowed: false, reason: `${signal.symbol} blocks ${signal.level_type} in ${signal.regime}` };
+      }
     }
 
     if (policy.sessionEntryTypes && Array.isArray(policy.sessionEntryTypes[signal.session])) {
@@ -902,6 +947,10 @@ class Backtester {
         tier:       signal.confidence_tier,
         session:    signal.session,
         regime:     signal.regime,
+        hourUTC:     new Date(signal.timestamp).getUTCHours(),
+        levelType:   signal.level_type,
+        confluence:  signal.confluence_score,
+        adx:         signal.adx_value,
         month:      signal.month,
         r:          exit.r,
         win:        exit.r > 0,
@@ -1024,7 +1073,7 @@ class Backtester {
     const grp = (field) => {
       const m = {};
       for (const t of trades) {
-        const k = t[field] || 'UNKNOWN';
+        const k = t[field] ?? 'UNKNOWN';
         if (!m[k]) m[k] = { trades: 0, wins: 0, totalR: 0 };
         m[k].trades++; m[k].totalR += t.r;
         if (t.r > 0) m[k].wins++;
@@ -1037,10 +1086,45 @@ class Backtester {
       }]));
     };
 
+    const grpBy = (name, selector) => {
+      const m = {};
+      for (const t of trades) {
+        const k = selector(t) ?? 'UNKNOWN';
+        if (!m[k]) m[k] = { trades: 0, wins: 0, totalR: 0 };
+        m[k].trades++; m[k].totalR += t.r;
+        if (t.r > 0) m[k].wins++;
+      }
+      return Object.fromEntries(Object.entries(m).map(([k, v]) => [k, {
+        trades:  v.trades,
+        wins:    v.wins,
+        winRate: winPct(v.wins, v.trades),
+        totalR:  parseFloat(v.totalR.toFixed(2)),
+      }]));
+    };
+
+    const adxBucket = (adx) => {
+      const value = Number(adx);
+      if (!Number.isFinite(value)) return 'UNKNOWN';
+      if (value < 15) return '<15';
+      if (value < 20) return '15-19';
+      if (value < 25) return '20-24';
+      if (value < 30) return '25-29';
+      return '30+';
+    };
+
     const entryGrp   = grp('entryType');
     const tierGrp    = grp('tier');
     const sessionGrp = grp('session');
     const monthGrp   = grp('month');
+    const hourGrp    = grp('hourUTC');
+    const levelGrp   = grp('levelType');
+    const confGrp    = grp('confluence');
+    const directionGrp = grp('direction');
+    const regimeGrp = grp('regime');
+    const exitGrp = grp('exitReason');
+    const adxGrp = grpBy('adxBucket', (t) => adxBucket(t.adx));
+    const sessionHourGrp = grpBy('sessionHour', (t) => `${t.session || 'UNKNOWN'}@${t.hourUTC ?? 'UNKNOWN'}`);
+    const levelDirectionGrp = grpBy('levelDirection', (t) => `${t.levelType || 'UNKNOWN'}:${t.direction || 'UNKNOWN'}`);
 
     const bestOf = (obj) => Object.entries(obj)
       .filter(([, v]) => v.trades >= 3)
@@ -1077,12 +1161,40 @@ class Backtester {
       byTier:      tierGrp,
       bySession:   sessionGrp,
       byMonth:     monthGrp,
+      byHourUTC:    hourGrp,
+      byLevelType:  levelGrp,
+      byConfluence: confGrp,
+      byDirection:  directionGrp,
+      byRegime:     regimeGrp,
+      byExitReason: exitGrp,
+      byAdxBucket:  adxGrp,
+      bySessionHour: sessionHourGrp,
+      byLevelDirection: levelDirectionGrp,
+      tradeLog: trades.map(t => ({
+        date:       t.entryTime?.slice(0, 16),
+        exitTime:   t.exitTime?.slice ? t.exitTime.slice(0, 16) : t.exitTime,
+        direction:  t.direction,
+        entryType:  t.entryType,
+        tier:       t.tier,
+        session:    t.session,
+        regime:     t.regime,
+        hourUTC:     t.hourUTC,
+        levelType:   t.levelType,
+        confluence:  t.confluence,
+        adx:         Number.isFinite(Number(t.adx)) ? Number(Number(t.adx).toFixed(2)) : null,
+        pnlR:       t.r,
+        outcome:    t.r > 0 ? 'WIN' : 'LOSS',
+        exitReason: t.exitReason,
+      })),
       recentTrades: trades.slice(-30).map(t => ({
         date:       t.entryTime?.slice(0, 16),
         exitTime:   t.exitTime?.slice ? t.exitTime.slice(0, 16) : t.exitTime,
         direction:  t.direction,
         entryType:  t.entryType,
         tier:       t.tier,
+        hourUTC:     t.hourUTC,
+        levelType:   t.levelType,
+        confluence:  t.confluence,
         pnlR:       t.r,
         outcome:    t.r > 0 ? 'WIN' : 'LOSS',
         exitReason: t.exitReason,

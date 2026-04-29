@@ -81,6 +81,16 @@ async function main() {
       byTier: report.byTier,
       bySession: report.bySession,
       byMonth: report.byMonth,
+      byHourUTC: report.byHourUTC,
+      byLevelType: report.byLevelType,
+      byConfluence: report.byConfluence,
+      byDirection: report.byDirection,
+      byRegime: report.byRegime,
+      byExitReason: report.byExitReason,
+      byAdxBucket: report.byAdxBucket,
+      bySessionHour: report.bySessionHour,
+      byLevelDirection: report.byLevelDirection,
+      tradeLog: report.tradeLog,
       skipCounts: report.skipCounts,
     });
   }
