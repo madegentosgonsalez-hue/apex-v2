@@ -349,6 +349,7 @@ Closing stale exposure to protect consistency and swap.`;
     if (!Number.isFinite(ageMs) || ageMs <= 0) return { action: 'NONE' };
 
     const timeStopHours = Math.max(24, Number(process.env.TIME_STOP_HOURS || 72));
+    const hardMaxHoldHours = Math.max(timeStopHours, Number(process.env.HARD_MAX_HOLD_HOURS || 72));
     const warnHours = Math.max(24, Number(process.env.TIME_STOP_WARN_HOURS || Math.max(24, timeStopHours / 2)));
     const timeStopMinR = Number(process.env.TIME_STOP_MIN_R || 0.5);
     const warnMinR = Number(process.env.TIME_STOP_WARN_MIN_R || 0.25);
@@ -356,6 +357,16 @@ Closing stale exposure to protect consistency and swap.`;
     const risk = Math.abs(signal.entry_price - signal.stop_loss);
     const dir = signal.direction === 'BUY' ? 1 : -1;
     const currentR = risk > 0 ? ((currentPrice - signal.entry_price) * dir) / risk : 0;
+
+    if (hardMaxHoldHours > 0 && ageHours >= hardMaxHoldHours) {
+      return {
+        action: 'EXIT',
+        stage: 'HARD_EXIT',
+        ageHours,
+        currentR,
+        reason: `Hard max hold reached (${ageHours.toFixed(1)}h >= ${hardMaxHoldHours}h).`,
+      };
+    }
 
     if (ageHours >= timeStopHours && currentR < timeStopMinR) {
       return {

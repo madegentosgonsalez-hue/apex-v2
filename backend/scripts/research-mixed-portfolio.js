@@ -47,6 +47,7 @@ async function main() {
   const h4ScanWindowMinutes = Number(process.env.RESEARCH_H4_SCAN_WINDOW_MINUTES || 30);
   const timeStopHours = Number(process.env.RESEARCH_TIME_STOP_HOURS || 72);
   const timeStopMinR = Number(process.env.RESEARCH_TIME_STOP_MIN_R || 0.5);
+  const hardMaxHoldHours = Number(process.env.RESEARCH_HARD_MAX_HOLD_HOURS || 72);
   const maxConcurrentTrades = Number(process.env.RESEARCH_MAX_CONCURRENT_TRADES || 5);
   const maxEntriesPerPair = Number(process.env.RESEARCH_MAX_ENTRIES_PER_PAIR || 2);
   const executionDragR = Number(process.env.RESEARCH_EXECUTION_DRAG_R || 0.15);
@@ -62,7 +63,7 @@ async function main() {
       dataService: dataForProvider(provider),
       strategyProfile,
       pairPolicy,
-      researchOptions: { allowConcurrentTrades, syntheticIntermarket, h4ScanWindowMinutes, timeStopHours, timeStopMinR },
+      researchOptions: { allowConcurrentTrades, syntheticIntermarket, h4ScanWindowMinutes, timeStopHours, timeStopMinR, hardMaxHoldHours },
     });
     console.log(`[Mixed Research] Building ${symbol} bundle via ${provider}...`);
     bundles.set(symbol, await builder._buildSeriesBundle(symbol, yearsBack));
@@ -76,7 +77,7 @@ async function main() {
       dataService: dataForProvider(provider),
       strategyProfile,
       pairPolicy,
-      researchOptions: { allowConcurrentTrades, syntheticIntermarket, h4ScanWindowMinutes, timeStopHours, timeStopMinR },
+      researchOptions: { allowConcurrentTrades, syntheticIntermarket, h4ScanWindowMinutes, timeStopHours, timeStopMinR, hardMaxHoldHours },
     });
     const report = await bt.runBacktest(symbol, yearsBack, null, null, bundles.get(symbol));
     results.push({

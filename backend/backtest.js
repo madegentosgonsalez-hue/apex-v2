@@ -791,6 +791,7 @@ class Backtester {
     if (!risk) return null;
     const timeStopHours = Math.max(0, Number(this.researchOptions.timeStopHours || 0));
     const timeStopMinR = Number(this.researchOptions.timeStopMinR || 0);
+    const hardMaxHoldHours = Math.max(0, Number(this.researchOptions.hardMaxHoldHours || 0));
     const entryMs = new Date(signal.timestamp).getTime();
 
     let lot1Done = false, lot2Done = false, lot3Done = false;
@@ -803,6 +804,10 @@ class Backtester {
       const hi = c.high, lo = c.low;
       const elapsedHours = entryMs ? ((new Date(c.datetime).getTime() - entryMs) / 36e5) : 0;
       const closeR = isBuy ? (c.close - entry) / risk : (entry - c.close) / risk;
+      if (hardMaxHoldHours > 0 && elapsedHours >= hardMaxHoldHours) {
+        const rem = lot2Done ? 0.2 : lot1Done ? 0.6 : 1.0;
+        return { r: parseFloat((totalR + closeR * rem).toFixed(2)), exitReason: 'HARD_TIME_STOP', exitTime: c.datetime, exitPrice: c.close };
+      }
 
       // SL check (priority over TP)
       const slHit = isBuy ? lo <= (beActive ? entry : sl) : hi >= (beActive ? entry : sl);
